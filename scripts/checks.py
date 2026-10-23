@@ -60,7 +60,9 @@ def main():
     remote = os.environ.get("DOCKER_HOST") == "ssh://root@coolifyx.progsoft.eu"
     local = not remote
     workspace = Path(tempfile.mkdtemp(prefix="container-", dir=root)) if local else Path("/mnt/HC_Volume_107251752/.usevps-qa-" + uuid.uuid4().hex)
+    capacity = Path(tempfile.mkdtemp(prefix="capacity-", dir=root)) if local else Path("/mnt/HC_Volume_107251752/.usevps-stat")
     if local:
+        capacity.chmod(0o000)
         workspace.chmod(0o777)
         (workspace / ".volume-id").write_text("ci-volume\n")
     else:
@@ -75,6 +77,7 @@ def main():
                                     "--cap-drop=ALL", "--security-opt=no-new-privileges:true", "--memory=256m",
                                     "--memory-swap=256m", "--pids-limit=128", "--cpus=1",
                                     "--publish", "127.0.0.1::8080", "--volume", str(workspace) + ":/workspace",
+                                    "--volume", str(capacity) + ":/volume-stat:ro", "--env", "USEVPS_VOLUME_STATS=/volume-stat",
                                     "--env", "USEVPS_VOLUME_ID=ci-volume", "usevps:checks"],
                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         for _ in range(60):
@@ -99,6 +102,8 @@ def main():
             raise RuntimeError("real health service unavailable")
         command(["docker", "exec", name, "python3", "-c", "import pip, venv"])
         command(["docker", "exec", name, "node", "--version"])
+        capacity_status = json.loads(execute(name, "status"))
+        assert capacity_status["admit"] and capacity_status["workspace_free_bytes"] > 0, capacity_status
         task = json.loads(execute(name, "run", payload(["python3", "-c",
                            "from pathlib import Path; assert Path('/proc/self/oom_score_adj').read_text().strip()=='500'; Path('result.txt').write_text(str(int(Path('input.txt').read_text())*2))"])))
         assert task["status"] == "passed", task
@@ -130,6 +135,8 @@ def main():
             process.wait(timeout=15)
         if local:
             shutil.rmtree(workspace)
+            capacity.chmod(0o700)
+            capacity.rmdir()
         else:
             cleanup = "from pathlib import Path; import shutil; p=Path(" + repr(str(workspace)) + "); assert p.name.startswith('.usevps-qa-'); shutil.rmtree(p)"
             command(["ssh", "-o", "BatchMode=yes", "root@coolifyx.progsoft.eu", "python3", "-"], input=cleanup.encode())
