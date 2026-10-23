@@ -9,6 +9,8 @@ Les projets existants conservent leurs données et leur fonctionnement.
 Les tâches utilisent `/workspace` dans un conteneur non privilégié. Ce chemin est
 lié au répertoire `usevps` du nouveau volume. Un quota ext4 de **7 Gio** borne
 l'ensemble des données de travail, caches et résultats. La réserve est de **20 Gio**.
+Un répertoire vide, inaccessible au compte de calcul et monté en lecture seule
+sur `/volume-stat`, permet de mesurer l'espace physique séparément du quota ext4.
 Une tâche à la fois, pic disque déclaré de **5 Gio maximum**, journaux de **20 Mio
 maximum**, durée de **60 minutes maximum**. Le conteneur peut utiliser jusqu'à **5 Gio de RAM**,
 256 processus et une priorité CPU basse. Le travail s'arrête si la RAM disponible
@@ -28,7 +30,7 @@ Le service HTTP du conteneur fournit uniquement une sonde de santé.
 
 ```sh
 rtk proxy python3 vps.py status
-rtk proxy python3 /Users/guillaumegaillard/.local/bin/workspace-budget.py run /chemin/projet -- rtk proxy python3 /Users/guillaumegaillard/Documents/ChatGPT/usevps/vps.py run --source /chemin/projet --disk-gib 1 --timeout 900 -- npm test
+rtk proxy python3 /Users/guillaumegaillard/.local/bin/workspace-budget.py --temp-gib 0.1 run /chemin/projet -- rtk proxy python3 /Users/guillaumegaillard/Documents/ChatGPT/usevps/vps.py run --source /chemin/projet --disk-gib 1 --timeout 900 -- npm test
 ```
 
 Les sources transmises sont limitées à 64 Mio. Dépendances, sorties, fichiers
@@ -41,7 +43,7 @@ Une tâche retourne son identifiant, son code de sortie et son statut réel.
 Pour rapatrier un résultat, sous le même encadrement `workspace-budget.py run` :
 
 ```sh
-rtk proxy python3 /Users/guillaumegaillard/Documents/ChatGPT/usevps/vps.py fetch IDENTIFIANT work/resultat.json stdout.log receipt.json
+rtk proxy python3 /Users/guillaumegaillard/.local/bin/workspace-budget.py --temp-gib 0.6 run /chemin/projet -- rtk proxy python3 /Users/guillaumegaillard/Documents/ChatGPT/usevps/vps.py fetch IDENTIFIANT work/resultat.json stdout.log receipt.json
 ```
 
 Le téléchargement, limité à 256 Mio par opération, vérifie un manifeste SHA256.
@@ -68,7 +70,7 @@ sur la dernière révision et branche à jour, puis déployer cette révision da
 L'offre GitHub Free du compte ne permet pas les protections sur ce dépôt privé
 (API de protection : HTTP 403) ; le passage par PR et les contrôles restent obligatoires.
 
-Le buildpack Docker Compose doit conserver les limites et le bind mount du fichier
+Le buildpack Docker Compose doit conserver les limites et les deux bind mounts du fichier
 `docker-compose.yaml`. Aucun déplacement du répertoire Docker global du serveur.
 Les petites couches de l'image restent sur le disque système Docker ; les fichiers
 de travail, dépendances installées par les tâches et caches vont sur le volume ajouté.

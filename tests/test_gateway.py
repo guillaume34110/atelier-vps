@@ -28,3 +28,22 @@ class GatewayTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     gateway.main()
                 execute.assert_not_called()
+
+    def test_accept_only_workspace_and_readonly_capacity_probe(self):
+        config = {"mount": "/mnt/volume", "volume_id": "uuid", "workspace": "/mnt/volume/usevps", "container": "test-worker"}
+        host = {"Privileged": False, "ReadonlyRootfs": True, "Memory": 5 * 1024 ** 3,
+                "MemorySwap": 5 * 1024 ** 3, "PidsLimit": 256, "CpuShares": 128,
+                "OomScoreAdj": 0, "CapDrop": ["ALL"], "SecurityOpt": ["no-new-privileges:true"]}
+        mounts = [{"Type": "bind", "Destination": "/workspace", "Source": config["workspace"], "RW": True},
+                  {"Type": "bind", "Destination": "/volume-stat", "Source": "/mnt/volume/.usevps-stat", "RW": False}]
+        for writable in [False, True]:
+            mounts[1]["RW"] = writable
+            info = [{"HostConfig": host, "Mounts": mounts, "State": {"Health": {"Status": "healthy"}}}]
+            with patch.dict(os.environ, {"SSH_ORIGINAL_COMMAND": "status"}), patch.object(gateway.Path, "read_text", return_value=json.dumps(config)), patch.object(gateway.subprocess, "check_output", side_effect=["uuid rw,prjquota", "container", json.dumps(info)]), patch.object(gateway.os, "execvp") as execute:
+                if writable:
+                    with self.assertRaises(ValueError):
+                        gateway.main()
+                    execute.assert_not_called()
+                else:
+                    gateway.main()
+                    self.assertEqual(execute.call_args.args[1][-1], "status")

@@ -73,15 +73,23 @@ def is_busy():
 def status():
     if not volume_ok():
         raise RuntimeError("volume identity mismatch")
-    s = os.statvfs(ROOT)
+    # ext4 project quotas clamp statvfs inside ROOT to the project allowance.
+    # An empty, inaccessible, read-only bind outside that project reports the disk.
+    capacity = Path(os.environ.get("USEVPS_VOLUME_STATS", str(ROOT)))
+    if capacity.stat().st_dev != ROOT.stat().st_dev:
+        raise RuntimeError("capacity probe is on another filesystem")
+    s = os.statvfs(capacity)
     free = s.f_bavail * s.f_frsize
+    q = os.statvfs(ROOT)
+    workspace_free = q.f_bavail * q.f_frsize
     reserve = int(float(os.environ.get("USEVPS_RESERVE_GIB", "20")) * GIB)
     used = usage(ROOT)
     return {"ok": True, "volume_id": os.environ["USEVPS_VOLUME_ID"],
-            "free_bytes": free, "used_bytes": used, "reserve_bytes": reserve,
+            "free_bytes": free, "workspace_free_bytes": workspace_free,
+            "used_bytes": used, "reserve_bytes": reserve,
             "budget_bytes": TOTAL_LIMIT, "host_available_ram": available_ram(),
             "busy": is_busy(),
-            "admit": free > reserve + MIB and used < TOTAL_LIMIT - MIB}
+            "admit": free > reserve + MIB and workspace_free > MIB and used < TOTAL_LIMIT - MIB}
 
 
 def extract(stream, target):
@@ -176,7 +184,7 @@ def run_job(request, stream):
                 time.sleep(0.2)
         s = status()
         reserve_ram = int(float(os.environ.get("USEVPS_HOST_RAM_RESERVE_GIB", "2")) * GIB)
-        if s["free_bytes"] - peak < s["reserve_bytes"] or s["used_bytes"] + peak > TOTAL_LIMIT:
+        if s["free_bytes"] - peak < s["reserve_bytes"] or s["workspace_free_bytes"] < peak or s["used_bytes"] + peak > TOTAL_LIMIT:
             raise RuntimeError("disk budget unavailable; retrieve and release completed jobs")
         if s["host_available_ram"] < reserve_ram + 256 * MIB:
             raise RuntimeError("host memory reserve unavailable")

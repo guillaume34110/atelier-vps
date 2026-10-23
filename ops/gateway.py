@@ -32,7 +32,10 @@ def main():
         raise ValueError("worker swap, process or CPU limits missing")
     if "ALL" not in (host.get("CapDrop") or []) or not any(x.startswith("no-new-privileges") for x in host.get("SecurityOpt") or []):
         raise ValueError("worker privilege restrictions missing")
-    if len(mounts) != 1 or mounts[0]["Destination"] != "/workspace" or mounts[0]["Source"] != config["workspace"]:
+    expected = {"/workspace": (config["workspace"], True),
+                "/volume-stat": (str(Path(config["mount"]) / ".usevps-stat"), False)}
+    if (len(mounts) != 2 or {m["Destination"] for m in mounts} != set(expected)
+            or any(m.get("Type") != "bind" or (m["Source"], m["RW"]) != expected[m["Destination"]] for m in mounts)):
         raise ValueError("unexpected host mounts")
     os.execvp("docker", ["docker", "exec", "-i", "--user", "10001:10001", names[0], *WORKER_EXEC, operation])
 

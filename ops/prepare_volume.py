@@ -83,6 +83,14 @@ def main():
         marker.write_text(VOLUME_ID + "\n")
     os.chown(marker, 0, 0)
     marker.chmod(0o444)
+    stats = MOUNT / ".usevps-stat"
+    if stats.is_symlink():
+        raise ValueError("capacity probe must be a real empty directory")
+    stats.mkdir(exist_ok=True)
+    if any(stats.iterdir()):
+        raise ValueError("capacity probe must remain empty")
+    os.chown(stats, 0, 0)
+    stats.chmod(0o000)
     free = shutil.disk_usage(MOUNT).free
     if free < 27 * GIB:
         raise RuntimeError("unexpected volume occupancy; inspect before admitting tasks")
