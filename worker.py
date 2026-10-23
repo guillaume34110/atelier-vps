@@ -61,6 +61,20 @@ def available_ram():
     raise RuntimeError("host memory unavailable")
 
 
+def validate_environment():
+    """Startup/health hook: validate configuration, independently of capacity."""
+    if not volume_ok() or os.geteuid() != 10001 or os.getegid() != 10001:
+        raise RuntimeError("worker identity or volume mismatch")
+    probe = os.environ.get("USEVPS_VOLUME_STATS")
+    if not probe:
+        raise RuntimeError("required read-only capacity probe is missing")
+    capacity = Path(probe)
+    if capacity.stat().st_dev != ROOT.stat().st_dev or not os.statvfs(capacity).f_flag & os.ST_RDONLY:
+        raise RuntimeError("capacity probe must be read-only on the workspace filesystem")
+    if not os.access(ROOT, os.W_OK):
+        raise RuntimeError("workspace is not writable")
+
+
 def is_busy():
     with (ROOT / ".queue.lock").open("a") as lock:
         try:
@@ -84,12 +98,15 @@ def status():
     workspace_free = q.f_bavail * q.f_frsize
     reserve = int(float(os.environ.get("USEVPS_RESERVE_GIB", "20")) * GIB)
     used = usage(ROOT)
+    ram = available_ram()
+    busy = is_busy()
+    reserve_ram = int(float(os.environ.get("USEVPS_HOST_RAM_RESERVE_GIB", "2")) * GIB)
     return {"ok": True, "volume_id": os.environ["USEVPS_VOLUME_ID"],
             "free_bytes": free, "workspace_free_bytes": workspace_free,
             "used_bytes": used, "reserve_bytes": reserve,
-            "budget_bytes": TOTAL_LIMIT, "host_available_ram": available_ram(),
-            "busy": is_busy(),
-            "admit": free > reserve + MIB and workspace_free > MIB and used < TOTAL_LIMIT - MIB}
+            "budget_bytes": TOTAL_LIMIT, "host_available_ram": ram, "busy": busy,
+            "admit": (not busy and ram >= reserve_ram + 256 * MIB
+                      and free > reserve + MIB and workspace_free > MIB and used < TOTAL_LIMIT - MIB)}
 
 
 def extract(stream, target):
@@ -251,10 +268,12 @@ def run_job(request, stream):
             if overflow.is_set():
                 reason = "log capture failed" if capture_error else "log limit"
             final = status()
-            if final["free_bytes"] < final["reserve_bytes"] or final["used_bytes"] - initial_used > peak:
+            if final["free_bytes"] < final["reserve_bytes"] or final["used_bytes"] > TOTAL_LIMIT or final["used_bytes"] - initial_used > peak:
                 reason = "disk limit"
             result.update(status="passed" if rc == 0 and not reason else "failed",
-                          returncode=rc, reason=reason, ended=time.time())
+                          returncode=rc, reason=reason, ended=time.time(),
+                          resources={"declared_disk_bytes": peak, "growth_bytes": final["used_bytes"] - initial_used,
+                                     "total_used_bytes": final["used_bytes"], "physical_free_bytes": final["free_bytes"]})
         except Exception as exc:
             stop_children()
             result.update(status="failed", reason=str(exc), returncode=1, ended=time.time())
@@ -317,6 +336,7 @@ def main():
     if not volume_ok():
         raise RuntimeError("required volume is not mounted")
     if action == "serve":
+        validate_environment()
         for state in (ROOT / "jobs").glob("*/receipt.json"):
             data = json.loads(state.read_text())
             if data.get("status") == "running":
@@ -324,9 +344,17 @@ def main():
                 receipt(state.parent, data)
         class Health(BaseHTTPRequestHandler):
             def do_GET(self):
-                self.send_response(200 if self.path == "/health" and volume_ok() else 503)
+                try:
+                    if self.path != "/health":
+                        raise ValueError("unknown health path")
+                    validate_environment()
+                    result = {"ok": True}
+                except Exception as exc:
+                    result = {"ok": False, "error": str(exc)}
+                self.send_response(200 if result["ok"] else 503)
+                self.send_header("Content-Type", "application/json")
                 self.end_headers()
-                self.wfile.write(b'{"ok":true}')
+                self.wfile.write(json.dumps(result).encode())
 
             def log_message(self, *_):
                 pass

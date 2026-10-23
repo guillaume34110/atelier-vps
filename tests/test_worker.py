@@ -94,6 +94,10 @@ class AdmissionTests(unittest.TestCase):
                 self.assertEqual(s["free_bytes"], 27 * worker.GIB)
                 self.assertEqual(s["workspace_free_bytes"], 7 * worker.GIB)
                 self.assertTrue(s["admit"])
+                with patch.object(worker, "available_ram", return_value=worker.GIB):
+                    self.assertFalse(worker.status()["admit"])
+                with patch.object(worker, "is_busy", return_value=True):
+                    self.assertFalse(worker.status()["admit"])
 
     def test_insufficient_project_quota_rejects_before_extract(self):
         s = {"free_bytes": 27 * worker.GIB, "reserve_bytes": 20 * worker.GIB,

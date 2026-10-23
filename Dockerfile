@@ -1,7 +1,7 @@
 FROM node:22-alpine3.22
 RUN apk add --no-cache python3 py3-pip git tini && addgroup -g 10001 worker && adduser -D -u 10001 -G worker worker
 WORKDIR /app
-COPY worker.py /app/worker.py
+COPY worker.py AGENTS.md /app/
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 USEVPS_ROOT=/workspace
 USER 10001:10001
 EXPOSE 8080

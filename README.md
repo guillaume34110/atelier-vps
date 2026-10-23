@@ -28,6 +28,13 @@ Il n'a ni shell interactif, ni transfert de ports, ni accès libre au socket Doc
 La passerelle vérifie le volume, les limites et les montages du seul conteneur désigné.
 Le service HTTP du conteneur fournit uniquement une sonde de santé.
 
+Les règles de travail sont incluses dans l'image à `/app/AGENTS.md`. Les hooks de
+démarrage et de santé refusent une identité, un volume ou une sonde physique mal
+configurés. L'admission vérifie place, quota, RAM et disponibilité du worker ; le
+contrôle après calcul vérifie encore le budget et enregistre les mesures dans le
+reçu, même pour un processus très court. Un manque de ressources empêche un
+nouveau calcul sans empêcher de récupérer les résultats terminés.
+
 ```sh
 rtk proxy python3 vps.py status
 rtk proxy python3 /Users/guillaumegaillard/.local/bin/workspace-budget.py --temp-gib 0.1 run /chemin/projet -- rtk proxy python3 /Users/guillaumegaillard/Documents/ChatGPT/usevps/vps.py run --source /chemin/projet --disk-gib 1 --timeout 900 -- npm test
@@ -69,6 +76,18 @@ La CI GitHub `checks` exécute la même suite. Intégrer par pull request après
 sur la dernière révision et branche à jour, puis déployer cette révision dans Coolify.
 L'offre GitHub Free du compte ne permet pas les protections sur ce dépôt privé
 (API de protection : HTTP 403) ; le passage par PR et les contrôles restent obligatoires.
+
+Installer le hook local avec `rtk git config --local core.hooksPath .githooks`.
+Il bloque les poussées directes vers main/master ainsi que le préfixe de branche
+interdit. Son activation reste propre à ce dépôt ; la CI complète reste requise.
+
+Le hook administrateur `ops/deploy_lock.py --hold` prend le même verrou que les
+calculs et refuse immédiatement si une tâche est active. Maintenir ce processus
+au premier plan pendant un déploiement Coolify ; les nouvelles tâches attendent
+ou sont refusées sans démarrer. Envoyer `release` sur son entrée après la fin du
+déploiement et le retour d'une santé valide. Une fermeture de la connexion libère
+le verrou ; vérifier alors l'état du déploiement avant de reprendre. Le hook
+installé est `/usr/local/lib/usevps/deploy_lock.py`, réservé à l'administration.
 
 Le buildpack Docker Compose doit conserver les limites et les deux bind mounts du fichier
 `docker-compose.yaml`. Aucun déplacement du répertoire Docker global du serveur.

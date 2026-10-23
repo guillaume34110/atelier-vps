@@ -3,4 +3,5 @@ output
 tests
 __pycache__
 *.md
+!AGENTS.md
 .env
