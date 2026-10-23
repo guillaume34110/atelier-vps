@@ -1,0 +1,6 @@
+.git
+output
+tests
+__pycache__
+*.md
+.env
