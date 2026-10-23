@@ -1,4 +1,5 @@
 import io
+import fcntl
 import json
 from pathlib import Path
 import tarfile
@@ -81,6 +82,19 @@ class ArchiveTests(unittest.TestCase):
 
 
 class AdmissionTests(unittest.TestCase):
+    def test_release_cannot_change_disk_usage_during_another_task(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(worker, "ROOT", Path(tmp)):
+            path = Path(tmp) / "jobs" / ("b" * 32)
+            path.mkdir(parents=True)
+            (path / "receipt.json").write_text('{"status":"passed"}')
+            with (Path(tmp) / ".queue.lock").open("a") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                with self.assertRaises(BlockingIOError):
+                    worker.release_job({"id": path.name})
+                self.assertTrue(path.exists())
+            self.assertEqual(worker.release_job({"id": path.name}), {"released": path.name})
+            self.assertFalse(path.exists())
+
     def test_invalid_request_cannot_start_process(self):
         with tempfile.TemporaryDirectory() as tmp, patch.object(worker, "ROOT", Path(tmp)):
             for request in [{"argv": "sh"}, {"argv": ["true"], "timeout": 3601},

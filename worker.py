@@ -293,6 +293,17 @@ def fetch(request, stream):
             archive.add(file, arcname=name, recursive=False)
 
 
+def release_job(request):
+    # Cleanup and execution share the same lock so admission snapshots stay valid.
+    with (ROOT / ".queue.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        path = job_path(request["id"])
+        if json.loads((path / "receipt.json").read_text())["status"] == "running":
+            raise ValueError("cannot release active task")
+        shutil.rmtree(path)
+        return {"released": path.name}
+
+
 def main():
     action = sys.argv[1]
     if not volume_ok():
@@ -321,12 +332,7 @@ def main():
     elif action == "fetch":
         fetch(read_request(), sys.stdout.buffer)
     elif action == "release":
-        request = read_request()
-        path = job_path(request["id"])
-        if json.loads((path / "receipt.json").read_text())["status"] == "running":
-            raise ValueError("cannot release active task")
-        shutil.rmtree(path)
-        print(json.dumps({"released": path.name}))
+        print(json.dumps(release_job(read_request())))
     else:
         raise ValueError("unknown operation")
     return 0
