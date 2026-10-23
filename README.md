@@ -14,7 +14,7 @@ maximum**, durée de **60 minutes maximum**. Le conteneur peut utiliser jusqu'à
 256 processus et une priorité CPU basse. Le travail s'arrête si la RAM disponible
 sur l'hôte tombe sous **2 Gio**. Une tâche arrêtée est signalée en échec et doit
 être relancée ; elle ne reprend pas automatiquement au milieu d'un calcul.
-En cas d'OOM, ses processus ont une priorité de destruction plus élevée que les
+En cas d'OOM, les processus de calcul ont une priorité de destruction plus élevée que les
 services ordinaires. Les ressources disponibles déterminent la mémoire réellement
 utilisable : le plafond de 5 Gio ne constitue pas une réservation de mémoire.
 
