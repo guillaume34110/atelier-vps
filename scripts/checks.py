@@ -102,11 +102,17 @@ def main():
             raise RuntimeError("real health service unavailable")
         command(["docker", "exec", name, "python3", "-c", "import pip, venv"])
         command(["docker", "exec", name, "node", "--version"])
+        bad = subprocess.run(["docker", "run", "--rm", "--network=none", "--read-only",
+                              "--cap-drop=ALL", "--security-opt=no-new-privileges:true", "--memory=64m",
+                              "--memory-swap=64m", "--pids-limit=32", "--volume", str(workspace) + ":/workspace",
+                              "--env", "USEVPS_VOLUME_ID=ci-volume", "usevps:checks"], capture_output=True, timeout=60)
+        assert bad.returncode != 0 and b"capacity probe is missing" in bad.stdout + bad.stderr, bad.stderr[-1000:]
         capacity_status = json.loads(execute(name, "status"))
         assert capacity_status["admit"] and capacity_status["workspace_free_bytes"] > 0, capacity_status
         task = json.loads(execute(name, "run", payload(["python3", "-c",
                            "from pathlib import Path; assert Path('/proc/self/oom_score_adj').read_text().strip()=='500'; Path('result.txt').write_text(str(int(Path('input.txt').read_text())*2))"])))
         assert task["status"] == "passed", task
+        assert task["resources"]["growth_bytes"] <= task["resources"]["declared_disk_bytes"], task
         data = execute(name, "fetch", json.dumps({"id": task["id"], "paths": ["work/result.txt", "receipt.json"]}).encode() + b"\n")
         archive = root / "roundtrip.tar"
         archive.write_bytes(data)
@@ -126,7 +132,12 @@ def main():
         assert failed["status"] == "failed" and failed["reason"] == "log limit", failed
         command(["docker", "exec", name, "python3", "-c", "from pathlib import Path; assert Path('/workspace/jobs/" + failed["id"] + "/stdout.log').stat().st_size <= 20*1024**2"])
         execute(name, "release", json.dumps({"id": failed["id"]}).encode() + b"\n")
+        fast = json.loads(execute(name, "run", payload(["python3", "-c", "from pathlib import Path; Path('too-big.bin').write_bytes(b'x'*1024**2)"], disk_bytes=256 * 1024), success=False))
+        assert fast["status"] == "failed" and fast["reason"] == "disk limit", fast
+        assert fast["resources"]["growth_bytes"] > fast["resources"]["declared_disk_bytes"], fast
+        execute(name, "release", json.dumps({"id": fast["id"]}).encode() + b"\n")
         print("Timeout, task cleanup and strict log cap: passed", flush=True)
+        print("Startup and fast-completion resource hooks: passed", flush=True)
         shutil.rmtree(dest)
         archive.unlink()
     finally:

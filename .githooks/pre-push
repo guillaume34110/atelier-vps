@@ -1,0 +1,16 @@
+#!/bin/sh
+# Local guard for the repository's required PR workflow.
+while read -r local_ref local_oid remote_ref remote_oid
+do
+    case "$remote_ref" in
+        refs/heads/main|refs/heads/master)
+            printf '%s\n' 'Push direct interdit : utiliser une branche, une PR et la CI verte.' >&2
+            exit 1
+            ;;
+        refs/heads/codex/*)
+            printf '%s\n' 'Préfixe de branche interdit par les règles du dépôt.' >&2
+            exit 1
+            ;;
+    esac
+done
+exit 0
