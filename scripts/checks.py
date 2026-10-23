@@ -96,6 +96,8 @@ def main():
             time.sleep(0.3)
         else:
             raise RuntimeError("real health service unavailable")
+        command(["docker", "exec", name, "python3", "-c", "import pip, venv"])
+        command(["docker", "exec", name, "node", "--version"])
         task = json.loads(execute(name, "run", payload(["python3", "-c",
                            "from pathlib import Path; Path('result.txt').write_text(str(int(Path('input.txt').read_text())*2))"])))
         assert task["status"] == "passed", task
