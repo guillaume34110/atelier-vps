@@ -6,6 +6,9 @@ from pathlib import Path
 import subprocess
 import sys
 
+# Compose 2.6 ignores oom_score_adj; enforce it in each unprivileged process.
+WORKER_EXEC = ["sh", "-c", 'echo 500 > /proc/self/oom_score_adj && exec python3 /app/worker.py "$@"', "usevps"]
+
 
 def main():
     operation = os.environ.get("SSH_ORIGINAL_COMMAND", "").strip()
@@ -27,14 +30,11 @@ def main():
         raise ValueError("worker isolation or memory limit missing")
     if host.get("MemorySwap") != host["Memory"] or not 0 < host.get("PidsLimit", 0) <= 256 or not 0 < host.get("CpuShares", 0) <= 128:
         raise ValueError("worker swap, process or CPU limits missing")
-    if host.get("OomScoreAdj", 0) < 500:
-        raise ValueError("worker OOM priority missing")
     if "ALL" not in (host.get("CapDrop") or []) or not any(x.startswith("no-new-privileges") for x in host.get("SecurityOpt") or []):
         raise ValueError("worker privilege restrictions missing")
     if len(mounts) != 1 or mounts[0]["Destination"] != "/workspace" or mounts[0]["Source"] != config["workspace"]:
         raise ValueError("unexpected host mounts")
-    os.execvp("docker", ["docker", "exec", "-i", "--user", "10001:10001", names[0],
-                         "python3", "/app/worker.py", operation])
+    os.execvp("docker", ["docker", "exec", "-i", "--user", "10001:10001", names[0], *WORKER_EXEC, operation])
 
 
 if __name__ == "__main__":

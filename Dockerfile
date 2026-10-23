@@ -7,5 +7,5 @@ USER 10001:10001
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s CMD python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=2)"
 ENTRYPOINT ["/sbin/tini", "--"]
-CMD ["python3", "/app/worker.py", "serve"]
+CMD ["sh", "-c", "echo 500 > /proc/self/oom_score_adj && exec python3 /app/worker.py serve"]
 LABEL eu.progsoft.usevps.image=true

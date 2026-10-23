@@ -15,6 +15,7 @@ import uuid
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 import vps
+from ops.gateway import WORKER_EXEC
 
 
 def command(argv, **kwargs):
@@ -26,7 +27,7 @@ def command(argv, **kwargs):
 
 def execute(container, action, body=b"", success=True):
     r = subprocess.run(["docker", "exec", "-i", "--user", "10001:10001", container,
-                        "python3", "/app/worker.py", action], input=body, capture_output=True, timeout=60)
+                        *WORKER_EXEC, action], input=body, capture_output=True, timeout=60)
     if success and r.returncode:
         raise RuntimeError(r.stderr.decode(errors="replace")[-2000:] + r.stdout.decode(errors="replace")[-1000:])
     if not success and r.returncode == 0:
@@ -99,7 +100,7 @@ def main():
         command(["docker", "exec", name, "python3", "-c", "import pip, venv"])
         command(["docker", "exec", name, "node", "--version"])
         task = json.loads(execute(name, "run", payload(["python3", "-c",
-                           "from pathlib import Path; Path('result.txt').write_text(str(int(Path('input.txt').read_text())*2))"])))
+                           "from pathlib import Path; assert Path('/proc/self/oom_score_adj').read_text().strip()=='500'; Path('result.txt').write_text(str(int(Path('input.txt').read_text())*2))"])))
         assert task["status"] == "passed", task
         data = execute(name, "fetch", json.dumps({"id": task["id"], "paths": ["work/result.txt", "receipt.json"]}).encode() + b"\n")
         archive = root / "roundtrip.tar"
