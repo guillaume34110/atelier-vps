@@ -35,7 +35,14 @@ class GatewayTests(unittest.TestCase):
                 "MemorySwap": 5 * 1024 ** 3, "PidsLimit": 256, "CpuShares": 128,
                 "OomScoreAdj": 0, "CapDrop": ["ALL"], "SecurityOpt": ["no-new-privileges:true"]}
         mounts = [{"Type": "bind", "Destination": "/workspace", "Source": config["workspace"], "RW": True},
-                  {"Type": "bind", "Destination": "/volume-stat", "Source": "/mnt/volume/.usevps-stat", "RW": False}]
+                  {"Type": "bind", "Destination": "/volume-stat", "Source": "/mnt/volume/.usevps-stat", "RW": False},
+                  {"Type": "bind", "Destination": "/usr", "Source": "/mnt/volume/.usevps-dev/usr", "RW": False},
+                  {"Type": "bind", "Destination": "/bin", "Source": "/mnt/volume/.usevps-dev/usr/bin", "RW": False},
+                  {"Type": "bind", "Destination": "/sbin", "Source": "/mnt/volume/.usevps-dev/usr/sbin", "RW": False},
+                  {"Type": "bind", "Destination": "/lib", "Source": "/mnt/volume/.usevps-dev/usr/lib", "RW": False},
+                  {"Type": "bind", "Destination": "/lib64", "Source": "/mnt/volume/.usevps-dev/usr/lib64", "RW": False},
+                  {"Type": "bind", "Destination": "/etc", "Source": "/mnt/volume/.usevps-dev/etc", "RW": False},
+                  {"Type": "bind", "Destination": "/opt", "Source": "/mnt/volume/.usevps-dev/opt", "RW": False}]
         for writable in [False, True]:
             mounts[1]["RW"] = writable
             info = [{"HostConfig": host, "Mounts": mounts, "State": {"Health": {"Status": "healthy"}}}]

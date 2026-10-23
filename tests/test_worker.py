@@ -88,7 +88,9 @@ class AdmissionTests(unittest.TestCase):
             capacity = Path(tmp) / "capacity"
             capacity.mkdir()
             def space(path):
-                return SimpleNamespace(f_bavail=(27 if path == capacity else 7) * worker.GIB, f_frsize=1)
+                return SimpleNamespace(f_bavail=(27 if path == capacity else 7) * worker.GIB,
+                                       f_bfree=(27 if path == capacity else 7) * worker.GIB,
+                                       f_blocks=(29 if path == capacity else 7) * worker.GIB, f_frsize=1)
             with patch.dict(worker.os.environ, {"USEVPS_VOLUME_STATS": str(capacity), "USEVPS_VOLUME_ID": "test"}), patch.object(worker, "volume_ok", return_value=True), patch.object(worker.os, "statvfs", side_effect=space), patch.object(worker, "available_ram", return_value=5 * worker.GIB):
                 s = worker.status()
                 self.assertEqual(s["free_bytes"], 27 * worker.GIB)
@@ -101,7 +103,7 @@ class AdmissionTests(unittest.TestCase):
 
     def test_insufficient_project_quota_rejects_before_extract(self):
         s = {"free_bytes": 27 * worker.GIB, "reserve_bytes": 20 * worker.GIB,
-             "workspace_free_bytes": worker.GIB // 2, "used_bytes": 0, "host_available_ram": 5 * worker.GIB}
+             "workspace_free_bytes": worker.GIB // 2, "budget_bytes": 27 * worker.GIB, "used_bytes": 0, "host_available_ram": 5 * worker.GIB}
         with tempfile.TemporaryDirectory() as tmp, patch.object(worker, "ROOT", Path(tmp)), patch.object(worker, "status", return_value=s):
             with self.assertRaises(RuntimeError), patch.object(worker, "extract") as extract:
                 worker.run_job({"argv": ["true"]}, io.BytesIO())
@@ -123,14 +125,14 @@ class AdmissionTests(unittest.TestCase):
     def test_invalid_request_cannot_start_process(self):
         with tempfile.TemporaryDirectory() as tmp, patch.object(worker, "ROOT", Path(tmp)):
             for request in [{"argv": "sh"}, {"argv": ["true"], "timeout": 3601},
-                            {"argv": ["true"], "disk_bytes": 6 * worker.GIB}]:
+                            {"argv": ["true"], "disk_bytes": 33 * worker.GIB}]:
                 with self.assertRaises(ValueError), patch("subprocess.Popen") as spawn:
                     worker.run_job(request, io.BytesIO())
                 spawn.assert_not_called()
 
     def test_no_disk_headroom_rejects_before_extract(self):
         s = {"free_bytes": 20 * worker.GIB, "reserve_bytes": 20 * worker.GIB,
-             "workspace_free_bytes": 7 * worker.GIB, "used_bytes": 0, "host_available_ram": 5 * worker.GIB}
+             "workspace_free_bytes": 7 * worker.GIB, "budget_bytes": 27 * worker.GIB, "used_bytes": 0, "host_available_ram": 5 * worker.GIB}
         with tempfile.TemporaryDirectory() as tmp, patch.object(worker, "ROOT", Path(tmp)), patch.object(worker, "status", return_value=s):
             with self.assertRaises(RuntimeError), patch.object(worker, "extract") as extract:
                 worker.run_job({"argv": ["true"]}, io.BytesIO())
@@ -138,7 +140,7 @@ class AdmissionTests(unittest.TestCase):
 
     def test_no_memory_headroom_rejects_before_extract(self):
         s = {"free_bytes": 30 * worker.GIB, "reserve_bytes": 20 * worker.GIB,
-             "workspace_free_bytes": 7 * worker.GIB, "used_bytes": 0, "host_available_ram": worker.GIB}
+             "workspace_free_bytes": 7 * worker.GIB, "budget_bytes": 27 * worker.GIB, "used_bytes": 0, "host_available_ram": worker.GIB}
         with tempfile.TemporaryDirectory() as tmp, patch.object(worker, "ROOT", Path(tmp)), patch.object(worker, "status", return_value=s):
             with self.assertRaises(RuntimeError), patch.object(worker, "extract") as extract:
                 worker.run_job({"argv": ["true"]}, io.BytesIO())

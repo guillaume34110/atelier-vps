@@ -8,7 +8,7 @@ permissions:
 jobs:
   checks:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -23,3 +23,11 @@ jobs:
           TASK_WORKSPACE: ${{ runner.temp }}/usevps
           PYTHONDONTWRITEBYTECODE: '1'
         run: python3 scripts/checks.py
+      - name: Keep concise integration evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dev-environment-proof
+          path: ${{ runner.temp }}/usevps/evidence
+          retention-days: 7
+          if-no-files-found: ignore

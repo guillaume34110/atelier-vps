@@ -7,11 +7,13 @@ monté sur `/mnt/HC_Volume_107251752`, UUID `527e635e-42d5-46e9-861d-643af162666
 Les projets existants conservent leurs données et leur fonctionnement.
 
 Les tâches utilisent `/workspace` dans un conteneur non privilégié. Ce chemin est
-lié au répertoire `usevps` du nouveau volume. Un quota ext4 de **7 Gio** borne
-l'ensemble des données de travail, caches et résultats. La réserve est de **20 Gio**.
+lié au répertoire `usevps` du nouveau volume. Ce volume est dédié aux agents :
+le quota ext4 utilise toute la capacité restante après les logiciels partagés,
+avec seulement **512 Mio de marge technique**. La limite réelle est indiquée
+par `status` ; elle est recalculée lors de la préparation du volume.
 Un répertoire vide, inaccessible au compte de calcul et monté en lecture seule
 sur `/volume-stat`, permet de mesurer l'espace physique séparément du quota ext4.
-Une tâche à la fois, pic disque déclaré de **5 Gio maximum**, journaux de **20 Mio
+Une tâche à la fois, pic disque déclaré dans la limite de la place disponible, journaux de **20 Mio
 maximum**, durée de **60 minutes maximum**. Le conteneur peut utiliser jusqu'à **5 Gio de RAM**,
 256 processus et une priorité CPU basse. Le travail s'arrête si la RAM disponible
 sur l'hôte tombe sous **2 Gio**. Une tâche arrêtée est signalée en échec et doit
@@ -19,6 +21,42 @@ sur l'hôte tombe sous **2 Gio**. Une tâche arrêtée est signalée en échec e
 En cas d'OOM, les processus de calcul ont une priorité de destruction plus élevée que les
 services ordinaires. Les ressources disponibles déterminent la mémoire réellement
 utilisable : le plafond de 5 Gio ne constitue pas une réservation de mémoire.
+
+## Environnement de développement
+
+Les logiciels résident sur le volume dédié dans `.usevps-dev`, monté en lecture
+seule. L'image Docker contient seulement le lanceur et les règles : aucune grosse
+couche de navigateur ou de SDK ne remplit le disque système. La préparation
+occupe environ 2 Gio et son pic est borné à 4 Gio. Les versions et leur empreinte
+sont disponibles dans `/opt/usevps-dev.json` et `ops/toolchain-lock.json`.
+
+| Outils | Environnement |
+| --- | --- |
+| JavaScript | Node 22.20.0, npm, pnpm 10.32.1 |
+| Python | Python 3.12, pip, venv, uv 0.9.7 |
+| Navigateur | Chromium headless et Playwright 1.64.1 |
+| JVM / Android | Java 17, Gradle 8.13, ADB et fastboot ARM64 |
+| Compilation | GCC/G++, make, CMake, Ninja, pkg-config, en-têtes Python |
+| Utilitaires | Git, SSH client, curl, rsync, jq, ripgrep, SQLite, ZIP/TAR/XZ, FFmpeg, RTK 0.43.0 |
+
+Les dépendances propres aux projets restent dans leurs environnements de travail.
+Ne pas copier les `node_modules`, `.venv` ou binaires macOS : les réinstaller pour
+Linux ARM64. Les caches npm/pnpm, uv/pip et Gradle sont partagés et comptés dans
+le quota. Java utilise le HOME et le répertoire temporaire du calcul, sans plafond
+mémoire global ajouté aux moteurs.
+
+Le navigateur utilise un profil temporaire par calcul, avec
+`executablePath: process.env.CHROMIUM_PATH` et les arguments `--no-sandbox`,
+`--disable-dev-shm-usage`. Ne pas télécharger un second navigateur par défaut.
+Les recettes réelles sont fournies dans `examples/` : serveur HTTP + API + clic
+et capture, venv + installation uv hors ligne + compilation native, et application
+Java compilée et exécutée par Gradle.
+
+Le NDK officiel Linux est distribué pour x86 ; les émulateurs et builds Android
+qui exigent ces binaires restent sur le Mac et son SDK canonique. Le VPS prend en
+charge les tâches web/JS, JVM et le client ADB natif ; il ne simule pas un test
+sur appareil Android. Sources : [NDK](https://developer.android.com/ndk/downloads),
+[configuration Linux](https://developer.android.com/studio/install).
 
 ## Accès et utilisation
 
@@ -45,6 +83,19 @@ d'environnement et clés sont exclus du transfert. Préparer les dépendances da
 la tâche distante, en respectant le pic déclaré. Les outils disponibles sont Python,
 Node.js 22, npm et Git, sur Linux ARM64. Le code dépendant de macOS, Metal/MLX ou d'un
 GPU doit utiliser une machine compatible. Les conteneurs ne disposent pas du socket Docker.
+
+Avant une écriture de plus de 1 Gio **dans une tâche distante**, utiliser le garde
+livré dans le conteneur :
+
+```sh
+rtk proxy python3 /Users/guillaumegaillard/.local/bin/storage-guard.py --volume . --require-gib 2
+```
+
+Il vérifie simultanément la place physique, le quota et le pic restant déclaré
+pour cette tâche. Sur le Mac, le script canonique conserve les réserves locales
+de 50/20 Gio ; l'exception de 512 Mio concerne seulement le volume dédié du VPS.
+Un tampon technique de 1 Mio permet de conserver le reçu d'échec si le quota
+est atteint ; il est recréé après libération, sans supprimer de données de travail.
 
 Une tâche retourne son identifiant, son code de sortie et son statut réel.
 Pour rapatrier un résultat, sous le même encadrement `workspace-budget.py run` :
@@ -89,7 +140,17 @@ déploiement et le retour d'une santé valide. Une fermeture de la connexion lib
 le verrou ; vérifier alors l'état du déploiement avant de reprendre. Le hook
 installé est `/usr/local/lib/usevps/deploy_lock.py`, réservé à l'administration.
 
-Le buildpack Docker Compose doit conserver les limites et les deux bind mounts du fichier
+Le buildpack Docker Compose doit conserver les limites et les neuf bind mounts du fichier
 `docker-compose.yaml`. Aucun déplacement du répertoire Docker global du serveur.
-Les petites couches de l'image restent sur le disque système Docker ; les fichiers
-de travail, dépendances installées par les tâches et caches vont sur le volume ajouté.
+Les petites couches du lanceur restent sur le disque système Docker ; logiciels,
+fichiers de travail, dépendances et caches vont sur le volume ajouté. Les sept
+montages de logiciels sont tous en lecture seule ; seul `/workspace` est writable.
+
+Pour préparer les outils, exécuter `ops/provision_env.py` comme administrateur
+sur un répertoire neuf, après le contrôle de stockage du volume cible. Le script
+vérifie les téléchargements, refuse un dossier existant non identifié, empêche le
+démarrage de services pendant l'installation et conserve un manifeste. Une version
+prête est réutilisée ; ne pas la modifier pendant qu'un conteneur l'utilise. Un
+changement de versions nécessite une préparation isolée puis une bascule validée.
+La CI Linux prépare son environnement temporaire dans `TASK_WORKSPACE`, exécute
+les vraies recettes et conserve uniquement les petites preuves d'intégration.

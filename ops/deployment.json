@@ -11,6 +11,7 @@
   "volume_mount": "/mnt/HC_Volume_107251752",
   "volume_id": "527e635e-42d5-46e9-861d-643af1626668",
   "workspace": "/mnt/HC_Volume_107251752/usevps",
-  "hard_quota_gib": 7,
-  "reserve_gib": 20
+  "toolchain_root": "/mnt/HC_Volume_107251752/.usevps-dev",
+  "quota_mode": "all_remaining_volume_capacity_minus_reserve",
+  "reserve_gib": 0.5
 }

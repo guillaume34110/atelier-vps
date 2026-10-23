@@ -1,5 +1,6 @@
 """Bounded Linux worker. Commands are transported over a restricted SSH key."""
 import ctypes
+import errno
 import fcntl
 import hashlib
 import io
@@ -22,9 +23,10 @@ MIB = 1024 ** 2
 ROOT = Path(os.environ.get("USEVPS_ROOT", "/workspace"))
 INPUT_LIMIT = 64 * MIB
 FETCH_LIMIT = 256 * MIB
-JOB_LIMIT = 5 * GIB
-TOTAL_LIMIT = 7 * GIB
+JOB_LIMIT = 32 * GIB
+TOTAL_LIMIT = 32 * GIB
 LOG_LIMIT = 20 * MIB
+RECEIPT_RESERVE = b"usevps receipt reserve v1\n"
 EXCLUDED = {".git", "node_modules", ".venv", "__pycache__", "CLAUDE.md"}
 
 
@@ -44,7 +46,7 @@ def usage(path):
             s = (Path(base) / name).lstat()
             total += s.st_blocks * 512
             count += 1
-            if count > 100000:
+            if count > 500000:
                 raise ValueError("file count limit")
     return total
 
@@ -73,6 +75,9 @@ def validate_environment():
         raise RuntimeError("capacity probe must be read-only on the workspace filesystem")
     if not os.access(ROOT, os.W_OK):
         raise RuntimeError("workspace is not writable")
+    expected = hashlib.sha256(Path("/app/toolchain-lock.json").read_bytes()).hexdigest()
+    if json.loads(Path("/opt/usevps-dev.json").read_text()).get("spec_sha256") != expected:
+        raise RuntimeError("development toolchain does not match this image")
 
 
 def is_busy():
@@ -96,17 +101,20 @@ def status():
     free = s.f_bavail * s.f_frsize
     q = os.statvfs(ROOT)
     workspace_free = q.f_bavail * q.f_frsize
-    reserve = int(float(os.environ.get("USEVPS_RESERVE_GIB", "20")) * GIB)
-    used = usage(ROOT)
+    reserve = int(float(os.environ.get("USEVPS_RESERVE_GIB", "0.5")) * GIB)
+    budget = min(TOTAL_LIMIT, q.f_blocks * q.f_frsize)
+    # With an ext4 project quota these counters include caches and file metadata.
+    used = ((q.f_blocks - q.f_bfree) * q.f_frsize
+            if q.f_blocks < s.f_blocks else usage(ROOT))
     ram = available_ram()
     busy = is_busy()
     reserve_ram = int(float(os.environ.get("USEVPS_HOST_RAM_RESERVE_GIB", "2")) * GIB)
     return {"ok": True, "volume_id": os.environ["USEVPS_VOLUME_ID"],
             "free_bytes": free, "workspace_free_bytes": workspace_free,
             "used_bytes": used, "reserve_bytes": reserve,
-            "budget_bytes": TOTAL_LIMIT, "host_available_ram": ram, "busy": busy,
+            "budget_bytes": budget, "host_available_ram": ram, "busy": busy,
             "admit": (not busy and ram >= reserve_ram + 256 * MIB
-                      and free > reserve + MIB and workspace_free > MIB and used < TOTAL_LIMIT - MIB)}
+                      and free > reserve + MIB and workspace_free > MIB and used < budget - MIB)}
 
 
 def extract(stream, target):
@@ -145,9 +153,39 @@ def job_path(value):
     return ROOT / "jobs" / value
 
 
+def ensure_receipt_reserve():
+    reserve = ROOT / ".receipt-reserve"
+    if reserve.exists():
+        if reserve.is_symlink() or reserve.stat().st_size != MIB:
+            raise RuntimeError("unexpected receipt reserve file")
+        return True
+    created = False
+    try:
+        with reserve.open("xb") as out:
+            created = True
+            out.write(RECEIPT_RESERVE + b"\0" * (MIB - len(RECEIPT_RESERVE)))
+        return True
+    except OSError as exc:
+        if created:
+            reserve.unlink(missing_ok=True)
+        if exc.errno not in {errno.ENOSPC, errno.EDQUOT}:
+            raise
+        return False
+
+
 def receipt(path, data):
     tmp = path / "receipt.tmp"
-    tmp.write_text(json.dumps(data))
+    try:
+        tmp.write_text(json.dumps(data))
+    except OSError as exc:
+        reserve = ROOT / ".receipt-reserve"
+        if exc.errno not in {errno.ENOSPC, errno.EDQUOT} or reserve.is_symlink() or not reserve.is_file():
+            raise
+        with reserve.open("rb") as source:
+            if reserve.stat().st_size != MIB or source.read(len(RECEIPT_RESERVE)) != RECEIPT_RESERVE:
+                raise RuntimeError("receipt reserve is not an owned technical buffer") from exc
+        reserve.unlink()
+        tmp.write_text(json.dumps(data))
     tmp.replace(path / "receipt.json")
 
 
@@ -188,7 +226,7 @@ def run_job(request, stream):
     if not isinstance(timeout, int) or not 1 <= timeout <= 3600:
         raise ValueError("timeout must be 1..3600 seconds")
     if not isinstance(peak, int) or not 0 < peak <= JOB_LIMIT:
-        raise ValueError("declared disk peak must be <= 5 GiB")
+        raise ValueError("declared disk peak must fit the dedicated volume (maximum 32 GiB)")
     with (ROOT / ".queue.lock").open("a") as lock:
         deadline = time.monotonic() + 30
         while True:
@@ -199,9 +237,11 @@ def run_job(request, stream):
                 if time.monotonic() >= deadline:
                     raise RuntimeError("busy: another task owns the worker")
                 time.sleep(0.2)
+        if not ensure_receipt_reserve():
+            raise RuntimeError("receipt headroom unavailable; retrieve and release completed jobs")
         s = status()
         reserve_ram = int(float(os.environ.get("USEVPS_HOST_RAM_RESERVE_GIB", "2")) * GIB)
-        if s["free_bytes"] - peak < s["reserve_bytes"] or s["workspace_free_bytes"] < peak or s["used_bytes"] + peak > TOTAL_LIMIT:
+        if s["free_bytes"] - peak < s["reserve_bytes"] or s["workspace_free_bytes"] < peak + MIB or s["used_bytes"] + peak > s["budget_bytes"] - MIB:
             raise RuntimeError("disk budget unavailable; retrieve and release completed jobs")
         if s["host_available_ram"] < reserve_ram + 256 * MIB:
             raise RuntimeError("host memory reserve unavailable")
@@ -218,7 +258,13 @@ def run_job(request, stream):
             env = os.environ.copy()
             env.update(HOME=str(work / ".home"), TMPDIR=str(work / ".tmp"),
                        XDG_CACHE_HOME=str(ROOT / "cache"), PIP_CACHE_DIR=str(ROOT / "cache" / "pip"),
-                       npm_config_cache=str(ROOT / "cache" / "npm"))
+                       npm_config_cache=str(ROOT / "cache" / "npm"),
+                       npm_config_store_dir=str(ROOT / "cache" / "pnpm"),
+                       UV_CACHE_DIR=str(ROOT / "cache" / "uv"), GRADLE_USER_HOME=str(ROOT / "cache" / "gradle"),
+                       USEVPS_JOB_DISK_BYTES=str(peak), USEVPS_JOB_INITIAL_USED=str(initial_used))
+            env["JAVA_TOOL_OPTIONS"] = (env.get("JAVA_TOOL_OPTIONS", "")
+                                         + " -Djava.io.tmpdir=" + str(work / ".tmp")
+                                         + " -Duser.home=" + str(work / ".home")).strip()
             # Reparent detached descendants here so only this task is cleaned up.
             if ctypes.CDLL(None).prctl(36, 1, 0, 0, 0) != 0:
                 raise RuntimeError("cannot enable child subreaper")
@@ -255,7 +301,7 @@ def run_job(request, stream):
                     reason = "log limit"
                 elif time.monotonic() - start > timeout:
                     reason = "timeout"
-                elif s["free_bytes"] < s["reserve_bytes"] or s["used_bytes"] > TOTAL_LIMIT or s["used_bytes"] - initial_used > peak:
+                elif s["free_bytes"] < s["reserve_bytes"] or s["used_bytes"] > s["budget_bytes"] or s["used_bytes"] - initial_used > peak:
                     reason = "disk limit"
                 elif s["host_available_ram"] < reserve_ram:
                     reason = "host memory pressure"
@@ -268,7 +314,7 @@ def run_job(request, stream):
             if overflow.is_set():
                 reason = "log capture failed" if capture_error else "log limit"
             final = status()
-            if final["free_bytes"] < final["reserve_bytes"] or final["used_bytes"] > TOTAL_LIMIT or final["used_bytes"] - initial_used > peak:
+            if final["free_bytes"] < final["reserve_bytes"] or final["used_bytes"] > final["budget_bytes"] or final["used_bytes"] - initial_used > peak:
                 reason = "disk limit"
             result.update(status="passed" if rc == 0 and not reason else "failed",
                           returncode=rc, reason=reason, ended=time.time(),
@@ -328,6 +374,7 @@ def release_job(request):
         if json.loads((path / "receipt.json").read_text())["status"] == "running":
             raise ValueError("cannot release active task")
         shutil.rmtree(path)
+        ensure_receipt_reserve()
         return {"released": path.name}
 
 
@@ -337,6 +384,7 @@ def main():
         raise RuntimeError("required volume is not mounted")
     if action == "serve":
         validate_environment()
+        ensure_receipt_reserve()
         for state in (ROOT / "jobs").glob("*/receipt.json"):
             data = json.loads(state.read_text())
             if data.get("status") == "running":
