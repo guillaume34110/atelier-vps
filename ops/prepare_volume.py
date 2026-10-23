@@ -12,6 +12,15 @@ WORKSPACE = MOUNT / "usevps"
 VOLUME_ID = "527e635e-42d5-46e9-861d-643af1626668"
 PROJECT_ID = 34110
 GIB = 1024 ** 3
+MIB = 1024 ** 2
+RESERVE_BYTES = GIB // 2
+
+
+def quota_bytes(physical_free, project_used):
+    budget = ((physical_free + project_used - RESERVE_BYTES) // MIB) * MIB
+    if budget <= project_used + MIB:
+        raise RuntimeError("insufficient volume headroom; preserve and retrieve existing results")
+    return budget
 
 
 def run(args):
@@ -74,7 +83,17 @@ def main():
         tmp.replace(fstab)
     WORKSPACE.mkdir(exist_ok=True)
     run(["chattr", "-p", str(PROJECT_ID), "+P", str(WORKSPACE)])
-    run(["setquota", "-P", str(PROJECT_ID), "0", str(7 * 1024 ** 2), "0", "100000", str(MOUNT)])
+    # Only the additional data volume is dedicated to the worker; never the system disk.
+    run(["tune2fs", "-m", "0", source])
+    physical = os.statvfs(MOUNT)
+    project = os.statvfs(WORKSPACE)
+    if project.f_blocks < physical.f_blocks:
+        project_used = (project.f_blocks - project.f_bfree) * project.f_frsize
+    else:
+        project_used = sum((Path(base) / n).lstat().st_blocks * 512
+                           for base, dirs, files in os.walk(WORKSPACE) for n in dirs + files)
+    budget = quota_bytes(physical.f_bavail * physical.f_frsize, project_used)
+    run(["setquota", "-P", str(PROJECT_ID), "0", str(budget // 1024), "0", "500000", str(MOUNT)])
     os.chown(WORKSPACE, 10001, 10001)
     marker = WORKSPACE / ".volume-id"
     if marker.exists() and marker.read_text().strip() != VOLUME_ID:
@@ -92,10 +111,10 @@ def main():
     os.chown(stats, 0, 0)
     stats.chmod(0o000)
     free = shutil.disk_usage(MOUNT).free
-    if free < 27 * GIB:
+    if free < RESERVE_BYTES:
         raise RuntimeError("unexpected volume occupancy; inspect before admitting tasks")
-    print(json.dumps({"volume": VOLUME_ID, "workspace": str(WORKSPACE), "hard_quota_gib": 7,
-                      "reserve_gib": 20, "free_gib": round(free / GIB, 2)}))
+    print(json.dumps({"volume": VOLUME_ID, "workspace": str(WORKSPACE), "hard_quota_gib": round(budget / GIB, 3),
+                      "reserve_gib": 0.5, "free_gib": round(free / GIB, 2)}))
 
 
 if __name__ == "__main__":

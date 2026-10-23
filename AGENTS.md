@@ -7,13 +7,28 @@ lecture seule dans l'image, à `/app/AGENTS.md`.
   avant une tâche ; conserver le verrou partagé, la limite d'une tâche active et
   l'attente bornée. Aucun shell hôte, socket Docker ou autre worker de débordement.
 - Préserver les projets existants. Conserver le volume ajouté distinct du disque
-  système : quota dur global 7 Gio, réserve physique 20 Gio, pic déclaré 5 Gio au
-  maximum, journaux 20 Mio, durée 3 600 secondes. Les sources, dépendances,
+  système : tout le volume ajouté est dédié au service ; quota dur calculé sur
+  toute la place restante après les logiciels, marge physique de 512 Mio,
+  pic déclaré selon la place réellement disponible, journaux 20 Mio, durée
+  3 600 secondes. Les sources, dépendances,
   téléchargements, caches et résultats comptent dans le budget.
 - Conserver le compte 10001:10001, la racine en lecture seule, les capacités
   supprimées, le refus des nouveaux privilèges, la RAM maximale de 5 Gio sans
   swap supplémentaire, la réserve hôte de 2 Gio et la priorité basse. Ne pas
   modifier Docker, Coolify, le système ou les réglages des autres projets.
+- Réutiliser les logiciels Ubuntu 24.04 de `.usevps-dev` montés en lecture seule,
+  conformément à `ops/toolchain-lock.json`. Node 22/pnpm, Python 3.12/uv, Java 17/
+  Gradle, ADB, Chromium/Playwright et les utilitaires partagés sont disponibles.
+  Garder les dépendances des projets séparées, avec les caches partagés. Ne pas
+  installer un second SDK ou navigateur sans besoin concret et budget explicite.
+- Pour le navigateur, utiliser `CHROMIUM_PATH`, un profil temporaire et les
+  arguments des exemples fournis. Les binaires macOS et les outils Android Linux
+  x86 ne fonctionnent pas sur ce VPS ARM64 : conserver émulateurs/NDK concernés
+  sur le Mac. Ne déclarer aucune recette Android appareil sans appareil réel.
+- Avant une écriture distante de plus de 1 Gio, lancer le garde livré dans l'image
+  à `/Users/guillaumegaillard/.local/bin/storage-guard.py` via RTK, dans le calcul
+  dont le pic est déclaré. Il contrôle quota, réserve et budget restant de cette
+  tâche. Les gardes locaux du Mac et leurs réserves restent inchangés.
 - Les hooks de démarrage et de santé doivent vérifier l'identité, le volume et
   la sonde physique en lecture seule. La sonde de santé vérifie la configuration ;
   elle doit rester saine en cas de manque de place ou de RAM pour permettre la

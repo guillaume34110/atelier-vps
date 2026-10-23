@@ -34,7 +34,11 @@ def main():
         raise ValueError("worker privilege restrictions missing")
     expected = {"/workspace": (config["workspace"], True),
                 "/volume-stat": (str(Path(config["mount"]) / ".usevps-stat"), False)}
-    if (len(mounts) != 2 or {m["Destination"] for m in mounts} != set(expected)
+    dev = Path(config["mount"]) / ".usevps-dev"
+    for destination, source in {"/usr": "usr", "/bin": "usr/bin", "/sbin": "usr/sbin", "/lib": "usr/lib",
+                                "/lib64": "usr/lib64", "/etc": "etc", "/opt": "opt"}.items():
+        expected[destination] = (str(dev / source), False)
+    if (len(mounts) != len(expected) or {m["Destination"] for m in mounts} != set(expected)
             or any(m.get("Type") != "bind" or (m["Source"], m["RW"]) != expected[m["Destination"]] for m in mounts)):
         raise ValueError("unexpected host mounts")
     os.execvp("docker", ["docker", "exec", "-i", "--user", "10001:10001", names[0], *WORKER_EXEC, operation])

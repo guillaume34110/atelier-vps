@@ -1,0 +1,22 @@
+{
+  "ubuntu": "24.04.5",
+  "ubuntu_sha256": {
+    "amd64": "e77b6f10c2590cef872b33ee9f635a0e3fd1f57fb074c0e52b5c7f56147a0c86",
+    "arm64": "a91d5a93010193712d346d761372b7c9db6dfcf093893161c64ca107f05914f2"
+  },
+  "node": "22.20.0",
+  "node_sha256": {
+    "amd64": "00bbd05e306ea68b6e13e17360d0e2f680b493ef95f2fea1c4296ff7437530bc",
+    "arm64": "06907b9c088ce62305bc1530e5c1ae1510245114645768f7750c349c5b6fe667"
+  },
+  "pnpm": "10.32.1",
+  "playwright": "1.64.1",
+  "uv": "0.9.7",
+  "gradle": "8.13",
+  "gradle_sha256": "20f1b1176237254a6fc204d8434196fa11a4cfb387567519c61556e8710aed78",
+  "rtk": "0.43.0",
+  "rtk_sha256": {
+    "amd64": "ff8a1e7766496e175291a85aeca1dc97c9ff6df33e51e5893d1fbc78fea2a609",
+    "arm64": "5519f7ca12e5c143a609f0d28a0a77b97413a8dce31c2681f1a41c24519a8731"
+  }
+}
