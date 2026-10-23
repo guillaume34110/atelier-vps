@@ -110,7 +110,8 @@ def main():
     env = {**os.environ, "DEBIAN_FRONTEND": "noninteractive", "HOME": "/root",
            "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
            "PLAYWRIGHT_BROWSERS_PATH": "/opt/ms-playwright", "npm_config_cache": "/tmp/npm-cache",
-           "GRADLE_USER_HOME": "/tmp/gradle-cache", "PYTHONDONTWRITEBYTECODE": "1"}
+           "GRADLE_USER_HOME": "/tmp/gradle-cache", "JAVA_HOME": "/usr/lib/jvm/default-java",
+           "PYTHONDONTWRITEBYTECODE": "1"}
 
     def run(argv, inside=False, timeout=1800):
         guard()
