@@ -1,0 +1,16 @@
+{
+  "github": "guillaume34110/usevps",
+  "coolify_url": "https://coolifyx.progsoft.eu",
+  "coolify_application_id": "cmvl1nuvl000hmha3uat5w59f",
+  "container": "cmvl1nuvl000hmha3uat5w59f-worker",
+  "coolify_source_id": "clgffckgt00019gmi1ot09y0w",
+  "coolify_destination_id": "clgfexwtr0000mi91cht1h80u",
+  "host": "coolifyx.progsoft.eu",
+  "ssh_alias": "dev-vps",
+  "ssh_user": "usevps",
+  "volume_mount": "/mnt/HC_Volume_107251752",
+  "volume_id": "527e635e-42d5-46e9-861d-643af1626668",
+  "workspace": "/mnt/HC_Volume_107251752/usevps",
+  "hard_quota_gib": 7,
+  "reserve_gib": 20
+}

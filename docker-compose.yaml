@@ -1,0 +1,24 @@
+services:
+  worker:
+    build: .
+    restart: unless-stopped
+    user: "10001:10001"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 5g
+    memswap_limit: 5g
+    cpu_shares: 128
+    pids_limit: 256
+    oom_score_adj: 500
+    environment:
+      - USEVPS_VOLUME_ID=527e635e-42d5-46e9-861d-643af1626668
+      - USEVPS_RESERVE_GIB=20
+      - USEVPS_HOST_RAM_RESERVE_GIB=2
+    volumes:
+      - /mnt/HC_Volume_107251752/usevps:/workspace
+    logging:
+      driver: json-file
+      options:
+        max-size: 2m
+        max-file: "2"

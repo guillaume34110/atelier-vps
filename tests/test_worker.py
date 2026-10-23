@@ -1,0 +1,110 @@
+import io
+import json
+from pathlib import Path
+import tarfile
+import tempfile
+import unittest
+from unittest.mock import patch
+
+import vps
+import worker
+
+
+def archive(entries):
+    out = io.BytesIO()
+    with tarfile.open(fileobj=out, mode="w") as tar:
+        for name, content, kind in entries:
+            item = tarfile.TarInfo(name)
+            item.type = kind
+            item.size = len(content)
+            item.linkname = "/etc/passwd" if kind == tarfile.SYMTYPE else ""
+            tar.addfile(item, io.BytesIO(content) if kind == tarfile.REGTYPE else None)
+    out.seek(0)
+    return out
+
+
+class ArchiveTests(unittest.TestCase):
+    def test_reject_paths_and_links(self):
+        for name in ("../escape", "/etc/passwd", "foo/../../escape", "CLAUDE.md", ".git/config"):
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                worker.safe_path(name)
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(ValueError):
+                worker.extract(archive([("link", b"", tarfile.SYMTYPE)]), Path(tmp))
+
+    def test_extract_and_duplicate_rejection(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            worker.extract(archive([("src/main.py", b"print(1)", tarfile.REGTYPE)]), root)
+            self.assertEqual((root / "src/main.py").read_bytes(), b"print(1)")
+            with self.assertRaises(FileExistsError):
+                worker.extract(archive([("src/main.py", b"replace", tarfile.REGTYPE)]), root)
+
+    def test_input_limit(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(worker, "INPUT_LIMIT", 3):
+            with self.assertRaises(ValueError):
+                worker.extract(archive([("large", b"1234", tarfile.REGTYPE)]), Path(tmp))
+
+    def test_source_filters_secrets_and_dependencies(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "main.py").write_text("print(1)")
+            (root / ".env").write_text("secret")
+            (root / "node_modules").mkdir()
+            (root / "node_modules/package").write_text("dependency")
+            (root / "external").symlink_to("/etc/passwd")
+            self.assertEqual([n for _, n in vps.inputs(root)], ["main.py"])
+
+    def test_bad_result_checksum_leaves_no_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            data = archive([("manifest.json", json.dumps({"result": {"bytes": 4, "sha256": "bad"}}).encode(), tarfile.REGTYPE),
+                            ("result", b"data", tarfile.REGTYPE)])
+            file = root / "result.tar"
+            file.write_bytes(data.read())
+            with self.assertRaises(ValueError):
+                vps.unpack_result(file, root / "download")
+            self.assertFalse((root / "download").exists())
+
+    def test_fetch_round_trip(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(worker, "ROOT", Path(tmp)):
+            job = Path(tmp) / "jobs" / ("a" * 32)
+            job.mkdir(parents=True)
+            (job / "receipt.json").write_text('{"status":"passed"}')
+            (job / "result.txt").write_text("processed")
+            stream = io.BytesIO()
+            worker.fetch({"id": "a" * 32, "paths": ["result.txt"]}, stream)
+            file = Path(tmp) / "download.tar"
+            file.write_bytes(stream.getvalue())
+            self.assertEqual(vps.unpack_result(file, Path(tmp) / "download"), 1)
+            self.assertEqual((Path(tmp) / "download/result.txt").read_text(), "processed")
+
+
+class AdmissionTests(unittest.TestCase):
+    def test_invalid_request_cannot_start_process(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(worker, "ROOT", Path(tmp)):
+            for request in [{"argv": "sh"}, {"argv": ["true"], "timeout": 3601},
+                            {"argv": ["true"], "disk_bytes": 6 * worker.GIB}]:
+                with self.assertRaises(ValueError), patch("subprocess.Popen") as spawn:
+                    worker.run_job(request, io.BytesIO())
+                spawn.assert_not_called()
+
+    def test_no_disk_headroom_rejects_before_extract(self):
+        s = {"free_bytes": 20 * worker.GIB, "reserve_bytes": 20 * worker.GIB,
+             "used_bytes": 0, "host_available_ram": 5 * worker.GIB}
+        with tempfile.TemporaryDirectory() as tmp, patch.object(worker, "ROOT", Path(tmp)), patch.object(worker, "status", return_value=s):
+            with self.assertRaises(RuntimeError), patch.object(worker, "extract") as extract:
+                worker.run_job({"argv": ["true"]}, io.BytesIO())
+            extract.assert_not_called()
+
+    def test_no_memory_headroom_rejects_before_extract(self):
+        s = {"free_bytes": 30 * worker.GIB, "reserve_bytes": 20 * worker.GIB,
+             "used_bytes": 0, "host_available_ram": worker.GIB}
+        with tempfile.TemporaryDirectory() as tmp, patch.object(worker, "ROOT", Path(tmp)), patch.object(worker, "status", return_value=s):
+            with self.assertRaises(RuntimeError), patch.object(worker, "extract") as extract:
+                worker.run_job({"argv": ["true"]}, io.BytesIO())
+            extract.assert_not_called()
+
+
+if __name__ == "__main__":
+    unittest.main()
