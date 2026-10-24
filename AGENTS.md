@@ -21,7 +21,7 @@ lecture seule dans l'image, à `/app/AGENTS.md`.
   téléchargements, caches et résultats comptent dans le budget.
 - Conserver le compte 10001:10001, la racine en lecture seule, les capacités
   supprimées, le refus des nouveaux privilèges, la RAM maximale de 5 Gio sans
-  swap supplémentaire, la réserve hôte de 2 Gio et la priorité basse. Ne pas
+  swap supplémentaire, la réserve hôte de 1 Gio et la priorité basse. Ne pas
   modifier Docker, Coolify, le système ou les réglages des autres projets.
 - Réutiliser les logiciels Ubuntu 24.04 de `.usevps-dev` montés en lecture seule,
   conformément à `ops/toolchain-lock.json`. Node 22/pnpm, Python 3.12/uv, Java 17/
@@ -54,8 +54,10 @@ lecture seule dans l'image, à `/app/AGENTS.md`.
   widget Mac. Le statut expose seulement des compteurs et huit activités publiques,
   sans commandes ni secrets. Garder cette télémétrie facultative indépendante des
   contrôles d'admission ; aucun port ni service de surveillance supplémentaire.
-  Le widget natif utilise seulement `status`, un délai court et la connexion SSH
-  existante. Vérifier le build macOS et son rendu réel, avec les budgets locaux,
+  Le suivi et la mini barre utilisent seulement `status`, un délai court et la
+  connexion SSH existante. L'onglet Gestion n'apparaît qu'après authentification
+  via l'alias administrateur séparé et utilise get/preview/apply avec révision.
+  Vérifier le build macOS et son rendu réel à plusieurs tailles, avec les budgets locaux,
   en plus de toute la suite Linux avant une poussée.
 - Le mode équipe utilise des workers, accès SSH, espaces et quotas ext4 distincts.
   L'identité est fixée par la passerelle ; une étiquette d'agent n'autorise jamais

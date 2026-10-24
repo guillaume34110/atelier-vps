@@ -18,6 +18,10 @@ struct Activity: Decodable, Identifiable {
     }
 }
 
+struct RAMAccounting: Decodable {
+    let task_ceiling_bytes: Double?
+}
+
 struct ResourcePool: Decodable {
     let cpu_total: Int
     let cpu_reserved: Int
@@ -27,6 +31,7 @@ struct ResourcePool: Decodable {
     let active_count: Int
     let max_jobs: Int
     var ram_available: Double? = nil
+    var ram_accounting: RAMAccounting? = nil
 }
 
 struct Telemetry: Decodable {
@@ -97,6 +102,7 @@ struct VPSSnapshot: Decodable {
                       && ($0.ram_bytes ?? -1).isFinite && ($0.ram_bytes ?? -1) >= 0
                       && ($0.disk_bytes ?? -1).isFinite && ($0.disk_bytes ?? -1) >= 0 }) else { throw MonitorError.invalidData }
             guard pool.ram_available.map({ $0.isFinite && $0 >= 0 }) ?? true else { throw MonitorError.invalidData }
+            guard pool.ram_accounting?.task_ceiling_bytes.map({ $0.isFinite && $0 >= 0 }) ?? true else { throw MonitorError.invalidData }
         }
         if let scope = value.scope {
             guard scope.id.range(of: "^[a-z][a-z0-9-]{0,31}$", options: .regularExpression) != nil,
@@ -106,8 +112,10 @@ struct VPSSnapshot: Decodable {
     }
 
     var ramFraction: Double? {
-        guard let total = telemetry?.worker_ram_limit, let used = telemetry?.worker_ram, total > 0 else { return nil }
-        return max(0, min(1, used / total))
+        guard let available = pool?.ram_available,
+              let ceiling = pool?.ram_accounting?.task_ceiling_bytes ?? telemetry?.worker_ram_limit,
+              ceiling > 0 else { return nil }
+        return max(0, min(1, available / ceiling))
     }
 
     var quotaFraction: Double { max(0, min(1, used_bytes / budget_bytes)) }
@@ -175,7 +183,7 @@ func runModelChecks() throws {
     "worker_ram_limit":5368709120,"worker_cpu_usec":1000000,"activity":[],"active":null}}
     """
     let first = try VPSSnapshot.decode(Data(base.utf8))
-    precondition(first.ramFraction == 0.2)
+    precondition(first.ramFraction == nil)
     precondition(CPUReading(previous: nil, current: first.telemetry).host == nil)
     let second = try VPSSnapshot.decode(Data(base.replacingOccurrences(of: "\"sample_time\":10", with: "\"sample_time\":12")
         .replacingOccurrences(of: "\"cpu_total\":1000", with: "\"cpu_total\":1200")
@@ -195,8 +203,13 @@ func runModelChecks() throws {
         "active": ["a", "b"].map { ["id": String(repeating: $0, count: 32), "agent": "Tests \($0)",
             "project": "Widget", "status": "running", "started": 100, "cpus": 1,
             "ram_bytes": 536870912, "disk_bytes": 1073741824] as [String: Any] }]
+    var pool = sharing["pool"] as! [String: Any]
+    pool["ram_available"] = 1073741824
+    pool["ram_accounting"] = ["task_ceiling_bytes": 4294967296]
+    sharing["pool"] = pool
     let shared = try VPSSnapshot.decode(JSONSerialization.data(withJSONObject: sharing))
     precondition(shared.agents.count == 2 && shared.agents.allSatisfy { $0.cpus == 1 })
+    precondition(shared.ramFraction == 0.25)
     do { _ = try VPSSnapshot.decode(Data(base.replacingOccurrences(of: "28781314048", with: "-1").utf8)); preconditionFailure("accepted invalid quota") }
     catch MonitorError.invalidData { }
     do { _ = try VPSSnapshot.decode(Data(repeating: 32, count: 65537)); preconditionFailure("accepted oversized JSON") }
@@ -212,7 +225,7 @@ func runModelChecks() throws {
     own.removeValue(forKey: "cpu_total"); own.removeValue(forKey: "cpu_idle")
     tenant["telemetry"] = own
     let onlyOwn = try VPSSnapshot.decode(JSONSerialization.data(withJSONObject: tenant))
-    precondition(onlyOwn.scope?.id == "alice" && onlyOwn.ramFraction == 0.2)
+    precondition(onlyOwn.scope?.id == "alice" && onlyOwn.ramFraction == nil)
     let tenantCPU = CPUReading(previous: onlyOwn.telemetry, current: second.telemetry)
     precondition(tenantCPU.worker != nil)
     precondition(Activity(id: "a", agent: "Tests", project: "Widget", status: "failed", started: 100, ended: 132).elapsed(at: Date()) == "00:32")

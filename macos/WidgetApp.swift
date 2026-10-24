@@ -13,13 +13,14 @@ private enum Configuration {
         let value = values["ssh_host"] ?? "dev-vps"
         return value.range(of: "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$", options: .regularExpression) == nil ? "dev-vps" : value
     }()
+    static let adminHost = values["admin_ssh_host"]
     static let dashboard: URL = {
         if let value = values["coolify_url"], let url = URL(string: value), url.scheme == "https" { return url }
         return URL(string: "https://github.com/guillaume34110/atelier-vps")!
     }()
 }
 
-private enum Paint {
+enum Paint {
     static let background = Color(red: 0.075, green: 0.10, blue: 0.087)
     static let panel = Color(red: 0.13, green: 0.17, blue: 0.145)
     static let green = Color(red: 0.66, green: 0.88, blue: 0.60)
@@ -36,6 +37,7 @@ final class Monitor: ObservableObject {
     @Published var received: Date?
     @Published var latency: Double = 0
     @Published var error = "Connecting…"
+    @Published var compact = false
     var onUpdate: (() -> Void)?
     var successfulSamples = 0
     var raw = Data()
@@ -131,6 +133,7 @@ private struct GaugeFace: View, Animatable {
     var level: Double
     var known: Bool
     var danger: Double
+    var warningBelow = false
     var animatableData: Double {
         get { level }
         set { level = newValue }
@@ -160,7 +163,8 @@ private struct GaugeFace: View, Animatable {
                 var line = Path()
                 line.move(to: point(value, tick % 5 == 0 ? 0.79 : 0.85))
                 line.addLine(to: point(value, 0.93))
-                context.stroke(line, with: .color(value >= danger ? Paint.orange : .black.opacity(0.78)), lineWidth: tick % 5 == 0 ? 1.2 : 0.65)
+                let warning = warningBelow ? value <= 1 - danger : value >= danger
+                context.stroke(line, with: .color(warning ? Paint.orange : .black.opacity(0.78)), lineWidth: tick % 5 == 0 ? 1.2 : 0.65)
                 if tick % 10 == 0 {
                     context.draw(Text("\(tick * 2)").font(.system(size: 10, weight: .semibold, design: .rounded)).foregroundColor(.black.opacity(0.8)),
                                  at: point(value, 0.65))
@@ -188,10 +192,11 @@ private struct Dial: View {
     let fraction: Double?
     let detail: String
     var danger: Double = 0.85
+    var warningBelow = false
 
     var body: some View {
         VStack(spacing: 2) {
-            GaugeFace(level: fraction ?? 0, known: fraction != nil, danger: danger)
+            GaugeFace(level: fraction ?? 0, known: fraction != nil, danger: danger, warningBelow: warningBelow)
                 .frame(height: 124)
                 .animation(.easeInOut(duration: 0.8), value: fraction)
             Text(title).font(.system(size: 11, weight: .bold)).tracking(1.2)
@@ -227,8 +232,10 @@ private struct Collapsible<Content: View>: View {
 
 private struct WidgetView: View {
     @ObservedObject var monitor: Monitor
+    @ObservedObject var admin: Administration
     let hide: () -> Void
     let menu: () -> Void
+    let compact: () -> Void
     @AppStorage("atelier-language") private var language = "system"
     private var snapshot: VPSSnapshot? { monitor.document }
     private var tint: Color { monitor.connected ? Paint.green : .orange }
@@ -239,10 +246,12 @@ private struct WidgetView: View {
         VStack(spacing: 10) {
             HStack(spacing: 8) {
                 Image(systemName: "gauge.with.dots.needle.67percent").foregroundColor(Paint.ivory)
-                Text("Atelier VPS").font(.system(size: 20, weight: .bold, design: .rounded))
+                Text("Atelier VPS").font(.system(size: 20, weight: .bold, design: .rounded)).lineLimit(1).minimumScaleFactor(0.9)
                 Spacer(minLength: 4)
-                Circle().fill(tint).frame(width: 7, height: 7)
-                Text(L(monitor.connected ? "Connected" : "Offline")).font(.system(size: 10)).foregroundColor(tint)
+                Circle().fill(tint).frame(width: 7, height: 7).help(L(monitor.connected ? "Connected" : "Offline"))
+                    .accessibilityLabel(L(monitor.connected ? "Connected" : "Offline"))
+                Button(action: compact) { Image(systemName: "rectangle.compress.vertical") }
+                    .help(L("Mini bar")).accessibilityLabel(L("Mini bar")).accessibilityIdentifier("widget-mini")
                 Button(action: { monitor.refresh() }) { Image(systemName: "arrow.clockwise") }
                     .help(L("Refresh")).accessibilityLabel(L("Refresh"))
                 Button(action: menu) { Image(systemName: "ellipsis") }.help(L("Options")).accessibilityLabel(L("Options"))
@@ -250,6 +259,15 @@ private struct WidgetView: View {
             }.buttonStyle(.plain)
             HStack(spacing: 0) { Color(red: 0.20, green: 0.36, blue: 0.72); Paint.ivory; Paint.orange }
                 .frame(height: 2).clipShape(Capsule())
+            if admin.authorized {
+                Picker(L("Widget section"), selection: $admin.showingManagement) {
+                    Text(L("Monitoring")).tag(false)
+                    Text(L("Management")).tag(true)
+                }.pickerStyle(.segmented).labelsHidden().accessibilityIdentifier("widget-section")
+            }
+            if admin.authorized && admin.showingManagement {
+                AdminView(admin: admin)
+            } else {
             HStack {
                 Text(L(snapshot?.scope?.mode == "allocated" ? "Your allocation" : "Available capacity"))
                 Spacer()
@@ -261,9 +279,9 @@ private struct WidgetView: View {
                         HStack(spacing: 8) {
                             Dial(title: L("YOUR CPU"), value: percent(monitor.cpu.worker), fraction: monitor.cpu.worker,
                                  detail: LF("Limit %.2f vCPU", snapshot?.telemetry?.worker_cpu_limit ?? Double(snapshot?.pool?.cpu_total ?? 0)))
-                            Dial(title: L("YOUR RAM"), value: gib(snapshot?.telemetry?.worker_ram) + " " + unit,
+                            Dial(title: L("RESERVABLE RAM"), value: gib(snapshot?.pool?.ram_available) + " " + unit,
                                  fraction: snapshot?.ramFraction,
-                                 detail: LF("Ceiling %@ %@", gib(snapshot?.telemetry?.worker_ram_limit), unit))
+                                 detail: L("Available for new tasks"), warningBelow: true)
                         }.opacity(monitor.connected ? 1 : 0.5)
                         VStack(alignment: .leading, spacing: 7) {
                             Text(LF("Reservable now: %@ %@ RAM", gib(snapshot?.pool?.ram_available), unit))
@@ -314,6 +332,7 @@ private struct WidgetView: View {
                     }
                 }.id(profile)
             }
+            }
             HStack {
                 Text(freshness).lineLimit(1)
                 Spacer(minLength: 4)
@@ -322,7 +341,7 @@ private struct WidgetView: View {
                 }.buttonStyle(.plain).help(L("Dashboard")).accessibilityLabel(L("Dashboard"))
             }.font(.system(size: 10)).foregroundColor(monitor.connected ? Paint.muted : .orange)
         }
-        .padding(14).frame(minWidth: 360, idealWidth: 480, maxWidth: .infinity, minHeight: 180, idealHeight: 670, maxHeight: .infinity)
+        .padding(14).frame(minWidth: 360, idealWidth: 480, maxWidth: .infinity, minHeight: 240, idealHeight: 640, maxHeight: .infinity)
         .foregroundColor(.white.opacity(0.92))
         .background(LinearGradient(colors: [Paint.panel, Paint.background], startPoint: .topLeading, endPoint: .bottomTrailing))
         .clipShape(RoundedRectangle(cornerRadius: 18))
@@ -336,6 +355,80 @@ private struct WidgetView: View {
     }
 }
 
+private struct MiniWidget: View {
+    @ObservedObject var monitor: Monitor
+    let expand: () -> Void
+    let menu: () -> Void
+    @AppStorage("atelier-language") private var language = "system"
+
+    private var snapshot: VPSSnapshot? { monitor.document }
+    var body: some View {
+        VStack(spacing: 6) {
+            HStack(spacing: 6) {
+                Circle().fill(monitor.connected ? Paint.green : .orange).frame(width: 6, height: 6)
+                    .accessibilityLabel(L(monitor.connected ? "Connected" : "Offline"))
+                Text("Atelier VPS").font(.system(size: 11, weight: .semibold))
+                Text(L(snapshot?.scope?.mode == "allocated" ? "Team" : "Solo"))
+                    .font(.system(size: 9)).foregroundColor(Paint.ivory)
+                Spacer(minLength: 2)
+                Text(LF("Disk free: %@ %@", gib(snapshot?.workspace_free_bytes), L("GiB")))
+                    .font(.system(size: 9)).foregroundColor(Paint.muted).lineLimit(1)
+                Button(action: expand) { Image(systemName: "arrow.up.left.and.arrow.down.right") }
+                    .help(L("Expand widget")).accessibilityLabel(L("Expand widget"))
+                    .accessibilityIdentifier("widget-expand")
+                Button(action: menu) { Image(systemName: "ellipsis") }
+                    .help(L("Options")).accessibilityLabel(L("Options"))
+            }.buttonStyle(.plain)
+            HStack(spacing: 10) {
+                metric("CPU", percent(monitor.cpu.worker), monitor.cpu.worker)
+                metric(L("Reservable"), gib(snapshot?.pool?.ram_available) + " " + L("GiB"), snapshot?.ramFraction)
+                metric(L("Committed"), gib(snapshot?.pool?.ram_reserved) + " " + L("GiB"), nil)
+                metric(L("Tasks"), "\(snapshot?.agents.count ?? 0)/\(snapshot?.pool?.max_jobs ?? 4)", Double(snapshot?.agents.count ?? 0) / Double(snapshot?.pool?.max_jobs ?? 4))
+            }.opacity(monitor.connected ? 1 : 0.45)
+            if !monitor.connected || snapshot?.maintenance == true {
+                Text(L(monitor.connected ? "Maintenance" : "Offline · values may be stale"))
+                    .font(.system(size: 9)).foregroundColor(.orange)
+            }
+        }
+        .padding(10).frame(maxWidth: .infinity, maxHeight: .infinity)
+        .foregroundColor(.white.opacity(0.92)).background(Paint.background)
+        .overlay(alignment: .top) {
+            HStack(spacing: 0) { Color(red: 0.20, green: 0.36, blue: 0.72); Paint.ivory; Paint.orange }
+                .frame(width: 30, height: 2)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Paint.green.opacity(0.3), lineWidth: 1))
+        .preferredColorScheme(.dark).environment(\.locale, Locale(identifier: UILanguage.code)).id(language)
+    }
+
+    private func metric(_ title: String, _ value: String, _ fraction: Double?) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title).font(.system(size: 9)).foregroundColor(Paint.muted).lineLimit(1)
+            Text(value).font(.system(size: 12, weight: .semibold, design: .rounded))
+                .monospacedDigit().lineLimit(1).minimumScaleFactor(0.85)
+            ProgressView(value: min(1, max(0, fraction ?? 0))).tint(Paint.green)
+                .controlSize(.mini).opacity(fraction == nil ? 0 : 1)
+        }.frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+private struct WidgetRoot: View {
+    @ObservedObject var monitor: Monitor
+    @ObservedObject var admin: Administration
+    let hide: () -> Void
+    let menu: () -> Void
+    let compact: () -> Void
+
+    var body: some View {
+        if monitor.compact {
+            MiniWidget(monitor: monitor, expand: compact, menu: menu)
+        } else {
+            WidgetView(monitor: monitor, admin: admin, hide: hide, menu: menu, compact: compact)
+        }
+    }
+}
+
 private final class WidgetPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
@@ -343,17 +436,25 @@ private final class WidgetPanel: NSPanel {
 
 final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let monitor = Monitor()
+    let administration = Administration(host: Configuration.adminHost)
     private var panel: WidgetPanel!
     private var statusItem: NSStatusItem!
     private var capturing = false
+    private var fullFrame: NSRect?
+    private var adminCheckStage = 0
+    private var adminCheckPolicy: AdminPolicy?
+    private var adminCheckApplied = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
-        let root = WidgetView(monitor: monitor, hide: { [weak self] in self?.hide() }, menu: { [weak self] in self?.showMenu() })
+        let root = WidgetRoot(monitor: monitor, admin: administration, hide: { [weak self] in self?.hide() },
+                              menu: { [weak self] in self?.showMenu() }, compact: { [weak self] in self?.toggleCompact() })
         let host = NSHostingView(rootView: root)
+        // Window bounds own resizing; automatic hosting minima retain the full view in mini mode.
+        host.sizingOptions = []
         let size = NSSize(width: 480, height: 670)
         panel = WidgetPanel(contentRect: NSRect(origin: .zero, size: size), styleMask: [.borderless, .nonactivatingPanel, .resizable], backing: .buffered, defer: false)
-        panel.minSize = NSSize(width: 360, height: 180)
+        panel.minSize = NSSize(width: 360, height: 240)
         panel.maxSize = NSSize(width: 900, height: 1200)
         panel.title = "Atelier VPS"
         panel.contentView = host
@@ -369,11 +470,10 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1200, height: 900)
             panel.setFrameOrigin(NSPoint(x: screen.maxX - size.width - 24, y: max(screen.minY + 24, screen.maxY - size.height - 30)))
         }
-        panel.setFrameAutosaveName("usevps-widget")
         if let screen = panel.screen?.visibleFrame {
             var frame = panel.frame
-            frame.size.width = min(max(360, frame.width), screen.width)
-            frame.size.height = min(max(180, frame.height), screen.height)
+            frame.size.width = min(900, max(360, frame.width), screen.width)
+            frame.size.height = min(1200, max(240, frame.height), screen.height)
             frame.origin.x = min(max(screen.minX, frame.minX), screen.maxX - frame.width)
             frame.origin.y = min(max(screen.minY, frame.minY), screen.maxY - frame.height)
             panel.setFrame(frame, display: false)
@@ -383,14 +483,45 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         statusItem.button?.toolTip = L("Show widget")
         statusItem.button?.target = self
         statusItem.button?.action = #selector(toggle)
+        if UserDefaults.standard.bool(forKey: "atelier-mini"), !CommandLine.arguments.contains("--capture") { setCompact(true) }
         panel.orderFrontRegardless()
         monitor.onUpdate = { [weak self] in self?.captureIfReady() }
+        administration.onUpdate = { [weak self] in self?.captureIfReady() }
+        administration.onApplied = { [weak self] in self?.adminCheckApplied = true; self?.monitor.refresh() }
         monitor.refresh()
+        administration.load()
         if CommandLine.arguments.contains("--capture") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 45) { [weak self] in
                 if self?.capturing != true { fputs("Live widget capture did not receive two real SSH samples\n", stderr); exit(1) }
             }
         }
+    }
+
+    private func toggleCompact() { setCompact(!monitor.compact) }
+
+    private func setCompact(_ value: Bool) {
+        guard monitor.compact != value else { return }
+        if value {
+            fullFrame = panel.frame
+            panel.minSize = NSSize(width: 340, height: 96)
+            panel.maxSize = NSSize(width: 900, height: 140)
+            monitor.compact = true
+            panel.setContentSize(NSSize(width: 400, height: 96))
+        } else {
+            panel.minSize = NSSize(width: 360, height: 240)
+            panel.maxSize = NSSize(width: 900, height: 1200)
+            monitor.compact = false
+            if let frame = fullFrame { panel.setFrame(frame, display: true) }
+        }
+        if !CommandLine.arguments.contains("--capture") { UserDefaults.standard.set(value, forKey: "atelier-mini") }
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if administration.applying {
+            administration.notice = L("Applying settings… Keep the widget open.")
+            return .terminateCancel
+        }
+        return .terminateNow
     }
 
     @objc func toggle() { if panel.isVisible { hide() } else { show() } }
@@ -402,8 +533,16 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         panel.level = panel.level == .floating ? .normal : .floating
         sender.state = panel.level == .floating ? .on : .off
     }
+    @objc func miniMenu() { toggleCompact() }
+    @objc func reloadAdmin() { administration.load() }
     @objc func showMenu() {
         let menu = NSMenu()
+        let mini = NSMenuItem(title: L("Mini bar layout"), action: #selector(miniMenu), keyEquivalent: "m")
+        mini.target = self; mini.state = monitor.compact ? .on : .off; menu.addItem(mini)
+        if Configuration.adminHost != nil {
+            let admin = NSMenuItem(title: L("Administrator access"), action: #selector(reloadAdmin), keyEquivalent: "")
+            admin.target = self; admin.isEnabled = !administration.busy; menu.addItem(admin)
+        }
         for (title, action) in [("Show widget", #selector(show)), ("Hide widget", #selector(hide)), ("Refresh", #selector(refresh))] {
             let item = NSMenuItem(title: L(title), action: action, keyEquivalent: ""); item.target = self; menu.addItem(item)
         }
@@ -424,6 +563,17 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         menu.popUp(positioning: nil, at: NSPoint(x: panel.frame.maxX - 120, y: panel.frame.maxY - 44), in: nil)
     }
     func windowShouldClose(_ sender: NSWindow) -> Bool { hide(); return false }
+    func windowDidResize(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow, window === panel else { return }
+        var frame = window.frame
+        frame.size.width = min(window.maxSize.width, max(window.minSize.width, frame.width))
+        frame.size.height = min(window.maxSize.height, max(window.minSize.height, frame.height))
+        if frame != window.frame { window.setFrame(frame, display: true) }
+        if !monitor.compact && !CommandLine.arguments.contains("--capture") { window.saveFrame(usingName: "usevps-widget") }
+    }
+    func windowDidMove(_ notification: Notification) {
+        if !monitor.compact && !CommandLine.arguments.contains("--capture") { panel.saveFrame(usingName: "usevps-widget") }
+    }
     func applicationWillTerminate(_ notification: Notification) { monitor.stop() }
 
     @objc private func setLanguage(_ sender: NSMenuItem) {
@@ -435,7 +585,29 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func captureIfReady() {
         guard !capturing, monitor.successfulSamples >= 2,
               let index = CommandLine.arguments.firstIndex(of: "--capture"), index + 1 < CommandLine.arguments.count else { return }
+        if CommandLine.arguments.contains("--capture-layouts"), Configuration.adminHost != nil,
+           administration.busy || !administration.authorized { return }
+        if CommandLine.arguments.contains("--exercise-admin") {
+            guard administration.authorized, !administration.busy, let state = administration.state else { return }
+            if adminCheckStage == 0 {
+                adminCheckPolicy = state.policy
+                administration.draft = state.policy
+                adminCheckStage = 1; administration.preview(); return
+            }
+            if adminCheckStage == 1 {
+                guard let plan = administration.plan, plan.affected.isEmpty, plan.policy == adminCheckPolicy else {
+                    fputs("Administrator no-op preview failed; no changes applied\n", stderr); exit(1)
+                }
+                adminCheckStage = 2; administration.apply(); return
+            }
+            if adminCheckStage == 2 {
+                guard adminCheckApplied else { fputs("Administrator no-op application failed\n", stderr); exit(1) }
+                adminCheckStage = 3; administration.load(); return
+            }
+            guard state.policy == adminCheckPolicy else { fputs("Administrator no-op changed the policy\n", stderr); exit(1) }
+        }
         capturing = true
+        panel.setContentSize(NSSize(width: 480, height: 640))
         if CommandLine.arguments.contains("--exercise-controls") {
             precondition(panel.styleMask.contains(.resizable))
             let originalSize = panel.frame.size
@@ -454,6 +626,15 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             let item = NSMenuItem()
             pin(item); precondition(panel.level != before)
             pin(item); precondition(panel.level == before)
+            let original = panel.frame
+            setCompact(true)
+            guard monitor.compact && panel.frame.height == 96 else {
+                fputs("Mini resize failed: expected 96, actual \(panel.frame)\n", stderr); exit(1)
+            }
+            setCompact(false)
+            guard !monitor.compact && panel.frame == original else {
+                fputs("Full frame restoration failed: expected \(original), actual \(panel.frame)\n", stderr); exit(1)
+            }
             refresh(); precondition(monitor.refreshing)
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [self] in
@@ -471,13 +652,65 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     "connected": monitor.connected, "cpu_fraction": monitor.cpu.worker.map { $0 as Any } ?? NSNull(),
                     "bundle": Bundle.main.bundlePath, "window_width": view.bounds.width, "window_height": view.bounds.height,
                     "controls_exercised": CommandLine.arguments.contains("--exercise-controls"),
+                    "administrator_authenticated": administration.authorized,
+                    "administrator_roundtrip_verified": adminCheckStage == 3 && adminCheckApplied,
                     "status": try JSONSerialization.jsonObject(with: monitor.raw)]
                 try JSONSerialization.data(withJSONObject: evidence, options: [.sortedKeys, .prettyPrinted])
                     .write(to: path.deletingPathExtension().appendingPathExtension("json"), options: .withoutOverwriting)
                 print("Real native widget capture saved: \(path.path)")
-                if CommandLine.arguments.contains("--exit-after-capture") { quit() }
+                if CommandLine.arguments.contains("--capture-layouts") { captureLayouts(path) }
+                else if CommandLine.arguments.contains("--exit-after-capture") { quit() }
             } catch { fputs("Widget capture failed: \(error)\n", stderr); exit(1) }
         }
+    }
+
+    private func captureLayouts(_ path: URL) {
+        var layouts: [(String, Double, Double, Bool, Bool)] = [
+            ("narrow", 360, 600, false, false), ("standard", 480, 640, false, false),
+            ("wide", 720, 800, false, false), ("short", 360, 300, false, false),
+            ("mini-small", 340, 96, true, false), ("mini", 400, 96, true, false),
+            ("mini-wide", 600, 96, true, false)]
+        if administration.authorized {
+            layouts += [("admin-narrow", 360, 620, false, true), ("admin", 480, 740, false, true),
+                        ("admin-wide", 720, 800, false, true)]
+        }
+        let originalFrame = panel.frame, originalPolicy = administration.draft
+        var evidence: [[String: Any]] = []
+        func next(_ index: Int) {
+            guard index < layouts.count else {
+                do {
+                    try JSONSerialization.data(withJSONObject: evidence, options: [.sortedKeys, .prettyPrinted])
+                        .write(to: path.deletingLastPathComponent().appendingPathComponent("widget-layouts.json"), options: .withoutOverwriting)
+                    setCompact(false); panel.setFrame(originalFrame, display: true)
+                    administration.showingManagement = false; administration.draft = originalPolicy
+                    if CommandLine.arguments.contains("--exit-after-capture") { quit() }
+                } catch { fputs("Layout receipt failed: \(error)\n", stderr); exit(1) }
+                return
+            }
+            let (name, width, height, mini, admin) = layouts[index]
+            setCompact(mini); administration.showingManagement = admin
+            if admin { administration.selectMode("allocated") }
+            panel.setContentSize(NSSize(width: width, height: height))
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [self] in
+                do {
+                    guard let view = panel.contentView else { throw MonitorError.invalidData }
+                    view.layoutSubtreeIfNeeded()
+                    guard view.bounds.width == width && view.bounds.height == height else {
+                        fputs("Layout \(name) expected \(width)×\(height), actual \(view.bounds)\n", stderr); exit(1)
+                    }
+                    guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { throw MonitorError.invalidData }
+                    view.cacheDisplay(in: view.bounds, to: bitmap)
+                    guard let png = bitmap.representation(using: .png, properties: [:]) else { throw MonitorError.invalidData }
+                    let image = path.deletingLastPathComponent().appendingPathComponent("widget-\(name).png")
+                    try png.write(to: image, options: .withoutOverwriting)
+                    evidence.append(["layout": name, "width": width, "height": height, "image": image.lastPathComponent,
+                                     "mini": mini, "management": admin, "administrator_authenticated": administration.authorized,
+                                     "server_mode": monitor.document?.scope?.mode ?? "unknown", "settings_applied": false])
+                    next(index + 1)
+                } catch { fputs("Layout capture failed: \(error)\n", stderr); exit(1) }
+            }
+        }
+        next(0)
     }
 }
 
@@ -485,7 +718,7 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 struct WidgetMain {
     static func main() {
         if CommandLine.arguments.contains("--self-test") {
-            do { try runModelChecks() } catch { fputs("Mac model checks failed: \(error)\n", stderr); exit(1) }
+            do { try runModelChecks(); try runAdminChecks() } catch { fputs("Mac model checks failed: \(error)\n", stderr); exit(1) }
             return
         }
         let application = NSApplication.shared

@@ -301,7 +301,7 @@ def run_job(request, stream):
             cache.mkdir(exist_ok=True)
             if not (ROOT / '.cache-accounting.json').exists():
                 resources.write_json(ROOT / '.cache-accounting.json', usage(cache))
-        reserve_ram = int(float(os.environ.get("USEVPS_HOST_RAM_RESERVE_GIB", "2")) * GIB)
+        reserve_ram = int(float(os.environ.get("USEVPS_HOST_RAM_RESERVE_GIB", "1")) * GIB)
         path = ROOT / "jobs" / ident
         work = path / "work"
         work.mkdir(parents=True)

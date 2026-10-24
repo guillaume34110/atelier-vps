@@ -27,7 +27,7 @@ def main():
     binary = bundle / 'Contents/MacOS/usevps'
     binary.parent.mkdir(parents=True)
     (bundle / 'Contents/Resources').mkdir()
-    sources = [source / name for name in ['WidgetModel.swift', 'WidgetApp.swift']]
+    sources = [source / name for name in ['WidgetModel.swift', 'AdminSettings.swift', 'AdminView.swift', 'WidgetApp.swift']]
     translations = sorted(source.glob('*.lproj/*.strings'))
     for locale in ['en', 'fr']:
         shutil.copytree(source / (locale + '.lproj'), bundle / 'Contents/Resources' / (locale + '.lproj'))

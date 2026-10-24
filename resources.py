@@ -174,7 +174,7 @@ def view(root, capacity):
     ram_reserved = sum(r['ram_bytes'] for r in active)
     disk_reserved = sum(max(0, r['disk_bytes'] - r.get('disk_used', 0)) for r in active)
     unspent_ram = sum(max(0, r['ram_bytes'] - r.get('ram_used', 0)) for r in active)
-    reserve_ram = int(float(os.environ.get('USEVPS_HOST_RAM_RESERVE_GIB', '2')) * GIB)
+    reserve_ram = int(float(os.environ.get('USEVPS_HOST_RAM_RESERVE_GIB', '1')) * GIB)
     available_ram = max(0, min(ram_total - ram_reserved,
                              capacity['host_available_ram'] - reserve_ram - OVERHEAD - unspent_ram))
     available_disk = max(0, min(capacity['workspace_free_bytes'] - MIB,
