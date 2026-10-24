@@ -1,0 +1,9 @@
+[project]
+name = "atelier-vps"
+version = "1.0.0"
+description = "A shared Linux workbench for local coding agents, over restricted SSH."
+requires-python = ">=3.10"
+dependencies = ["mcp==2.3.0"]
+
+[tool.uv]
+package = false

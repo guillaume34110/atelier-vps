@@ -5,3 +5,13 @@ __pycache__
 *.md
 !AGENTS.md
 .env
+.env.*
+.venv
+node_modules
+macos
+docs
+skills
+ops/deployment.local.json
+docker-compose.local.yaml
+*.key
+*.pem

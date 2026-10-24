@@ -1,156 +1,114 @@
-# usevps
+<p align="center"><img src="docs/assets/atelier-vps.svg" alt="Atelier VPS — vos agents, un serveur, chacun sa part" width="100%"></p>
 
-Exécution distante des tâches de développement sur le VPS ARM Hetzner, gérée par Coolify.
+<p align="center">
+<a href="https://github.com/guillaume34110/atelier-vps/actions/workflows/ci.yml"><img src="https://github.com/guillaume34110/atelier-vps/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+<a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-eee5cf" alt="MIT license"></a>
+<img src="https://img.shields.io/badge/Linux-ARM64-4265b2" alt="Linux ARM64">
+<img src="https://img.shields.io/badge/MCP-local%20stdio-d7664d" alt="MCP over local stdio">
+</p>
 
-Le disque système d'origine est de 40 Go. Le volume ajouté de 30 Go est distinct,
-monté sur `/mnt/HC_Volume_107251752`, UUID `527e635e-42d5-46e9-861d-643af1626668`.
-Les projets existants conservent leurs données et leur fonctionnement.
+<p align="center"><strong>A shared Linux workbench for your local coding agents.</strong><br>
+Reserve a slice of CPU, RAM and disk. Borrow idle cores. Bring verified results home.</p>
 
-Les tâches utilisent `/workspace` dans un conteneur non privilégié. Ce chemin est
-lié au répertoire `usevps` du nouveau volume. Ce volume est dédié aux agents :
-le quota ext4 utilise toute la capacité restante après les logiciels partagés,
-avec seulement **512 Mio de marge technique**. La limite réelle est indiquée
-par `status` ; elle est recalculée lors de la préparation du volume.
-Un répertoire vide, inaccessible au compte de calcul et monté en lecture seule
-sur `/volume-stat`, permet de mesurer l'espace physique séparément du quota ext4.
-Une tâche à la fois, pic disque déclaré dans la limite de la place disponible, journaux de **20 Mio
-maximum**, durée de **60 minutes maximum**. Le conteneur peut utiliser jusqu'à **5 Gio de RAM**,
-256 processus et une priorité CPU basse. Le travail s'arrête si la RAM disponible
-sur l'hôte tombe sous **2 Gio**. Une tâche arrêtée est signalée en échec et doit
-être relancée ; elle ne reprend pas automatiquement au milieu d'un calcul.
-En cas d'OOM, les processus de calcul ont une priorité de destruction plus élevée que les
-services ordinaires. Les ressources disponibles déterminent la mémoire réellement
-utilisable : le plafond de 5 Gio ne constitue pas une réservation de mémoire.
+<p align="center"><a href="docs/README.fr.md">Français</a> · <a href="docs/deployment.md">Server setup</a> · <a href="docs/integration.md">Agent integration</a> · <a href="docs/architecture.md">Resource sharing</a> · <a href="docs/widget.md">Mac widget</a></p>
 
-## Environnement de développement
+Atelier VPS moves compatible builds, tests and file processing off your laptop.
+Several agents can use one VPS at the same time, with atomic resource
+reservations and bounded jobs. Node, Python, Java, Chromium and native build
+utilities share one immutable toolchain. A small native Mac widget shows real
+analog CPU/RAM gauges, running agents and their reserved slices.
 
-Les logiciels résident sur le volume dédié dans `.usevps-dev`, monté en lecture
-seule. L'image Docker contient seulement le lanceur et les règles : aucune grosse
-couche de navigateur ou de SDK ne remplit le disque système. La préparation
-occupe environ 2 Gio et son pic est borné à 4 Gio. Les versions et leur empreinte
-sont disponibles dans `/opt/usevps-dev.json` et `ops/toolchain-lock.json`.
+No public worker port is required. The local client and MCP server use a
+restricted SSH gateway. Your credentials stay in your own SSH configuration.
 
-| Outils | Environnement |
+## Get started
+
+First deploy your **own VPS** using the [server guide](docs/deployment.md), or ask
+its operator for a restricted SSH alias. The maintainer's infrastructure is not
+a hosted service for public use.
+
+```sh
+git clone https://github.com/guillaume34110/atelier-vps.git
+cd atelier-vps
+python3 scripts/install.py --host dev-vps
+atelier-vps status
+```
+
+The macOS/Linux client needs Python 3.10+ and OpenSSH. Install [uv](https://docs.astral.sh/uv/)
+for the pinned MCP dependency. With a working Codex CLI, the installer registers
+`atelier-vps`, sets its tool timeout and installs the VPS-first routing skill.
+Restart the agent host to discover the tools. Keep `~/.local/bin` on PATH.
+
+```sh
+atelier-vps run --source ./my-project --agent "Tests · API" \
+  --cpus 1 --ram-gib 1 --disk-gib 2 --timeout 900 -- npm test
+```
+
+Sources are filtered and streamed without a second local archive. Local
+dependencies, Git history, common secret files and generated outputs are
+excluded. Recreate dependencies from lockfiles for Linux ARM64.
+
+Fetch into explicitly bounded temporary storage, then preserve useful files
+before releasing the completed remote job:
+
+```sh
+mkdir -p /your/bounded/task-workspace
+TASK_WORKSPACE=/your/bounded/task-workspace atelier-vps fetch JOB_ID \
+  stdout.log receipt.json work/result.json
+# Inspect and preserve the verified files first.
+atelier-vps release JOB_ID --confirmed
+```
+
+Use any stricter local storage guard. The MCP integration detects the canonical
+`workspace-budget.py` helper automatically. [Transfer details](docs/integration.md).
+The legacy `usevps` launcher can keep pointing to the same client.
+
+## Share the cake
+
+| Resource | Behavior |
 | --- | --- |
-| JavaScript | Node 22.20.0, npm, pnpm 10.32.1 |
-| Python | Python 3.12, pip, venv, uv 0.9.7 |
-| Navigateur | Chromium headless et Playwright 1.64.1 |
-| JVM / Android | Java 17, Gradle 8.13, ADB et fastboot ARM64 |
-| Compilation | GCC/G++, make, CMake, Ninja, pkg-config, en-têtes Python |
-| Utilitaires | Git, SSH client, curl, rsync, jq, ripgrep, SQLite, ZIP/TAR/XZ, FFmpeg, RTK 0.43.0 |
+| CPU | Reserve whole cores; idle cores are lent and reassigned as jobs join or leave. |
+| RAM | Reserve a peak; admission accounts for reservations and real host memory. |
+| Disk | Reserve the complete peak: sources, dependencies, caches, logs and results. |
+| Jobs | Up to four, subject to actual CPU, RAM and disk capacity. |
+| Neighbors | Low CPU priority, a host RAM floor and container limits protect other projects. |
+| Maintenance | An exclusive deployment lock waits for active jobs to finish. |
 
-Les dépendances propres aux projets restent dans leurs environnements de travail.
-Ne pas copier les `node_modules`, `.venv` ou binaires macOS : les réinstaller pour
-Linux ARM64. Les caches npm/pnpm, uv/pip et Gradle sont partagés et comptés dans
-le quota. Java utilise le HOME et le répertoire temporaire du calcul, sans plafond
-mémoire global ajouté aux moteurs.
+The reference pool has 4 ARM64 vCPU, a 5 GiB container ceiling, a 2 GiB host RAM
+floor and a dedicated 30 GiB volume. Shared tools occupy about 2 GiB; the rest
+has a hard ext4 workspace quota, with a 512 MiB physical margin. Always read
+**live status**: retained results and caches consume capacity. The original
+system disk is never used for overflow.
 
-Le navigateur utilise un profil temporaire par calcul, avec
-`executablePath: process.env.CHROMIUM_PATH` et les arguments `--no-sandbox`,
-`--disable-dev-shm-usage`. Ne pas télécharger un second navigateur par défaut.
-Les recettes réelles sont fournies dans `examples/` : serveur HTTP + API + clic
-et capture, venv + installation uv hors ligne + compilation native, et application
-Java compilée et exécutée par Gradle.
+Container memory and workspace quota are hard limits. Per-job RAM/disk guards
+are sampled checks, not kernel isolation between hostile jobs. An unexpected
+supervisor death blocks admission until a controlled restart. Finished results
+remain retrievable when resources are exhausted.
 
-Le NDK officiel Linux est distribué pour x86 ; les émulateurs et builds Android
-qui exigent ces binaires restent sur le Mac et son SDK canonique. Le VPS prend en
-charge les tâches web/JS, JVM et le client ADB natif ; il ne simule pas un test
-sur appareil Android. Sources : [NDK](https://developer.android.com/ndk/downloads),
-[configuration Linux](https://developer.android.com/studio/install).
+## Compact toolchain
 
-## Accès et utilisation
+| Workload | Included |
+| --- | --- |
+| JavaScript | Node 22, npm, pnpm |
+| Python | Python 3.12, venv, pip, uv |
+| Java / Android support | JDK 17, Gradle, ADB, fastboot |
+| Browser checks | Chromium, Playwright |
+| Native / media / data | GCC/G++, Make, CMake, Ninja, ffmpeg, SQLite, jq, Git, rsync, ZIP, RTK |
 
-La clé SSH dédiée reste sur le poste client. Le compte `usevps` ne peut appeler
-que `status`, `run`, `fetch` et `release`, à travers une passerelle contrôlée.
-Il n'a ni shell interactif, ni transfert de ports, ni accès libre au socket Docker.
-La passerelle vérifie le volume, les limites et les montages du seul conteneur désigné.
-Le service HTTP du conteneur fournit uniquement une sonde de santé.
+Exact versions and checksums are in [toolchain-lock.json](ops/toolchain-lock.json).
+Keep macOS APIs, Metal/MLX, GPU tasks, Docker daemon work, Android emulators and
+incompatible SDK/NDK binaries on a compatible machine.
 
-Les règles de travail sont incluses dans l'image à `/app/AGENTS.md`. Les hooks de
-démarrage et de santé refusent une identité, un volume ou une sonde physique mal
-configurés. L'admission vérifie place, quota, RAM et disponibilité du worker ; le
-contrôle après calcul vérifie encore le budget et enregistre les mesures dans le
-reçu, même pour un processus très court. Un manque de ressources empêche un
-nouveau calcul sans empêcher de récupérer les résultats terminés.
+## Designed to be understood
 
-```sh
-rtk proxy python3 vps.py status
-rtk proxy python3 /Users/guillaumegaillard/.local/bin/workspace-budget.py --temp-gib 0.1 run /chemin/projet -- rtk proxy python3 /Users/guillaumegaillard/Documents/ChatGPT/usevps/vps.py run --source /chemin/projet --disk-gib 1 --timeout 900 -- npm test
-```
+Read the [architecture](docs/architecture.md), [security model](SECURITY.md),
+[deployment guide](docs/deployment.md) and [contribution workflow](CONTRIBUTING.md).
+The [examples](examples) exercise a browser with a real API, Python/native code
+and Java/Gradle. CI also tests simultaneous jobs, memory stops, cleanup, timeouts
+and verified transfers.
 
-Les sources transmises sont limitées à 64 Mio. Dépendances, sorties, fichiers
-d'environnement et clés sont exclus du transfert. Préparer les dépendances dans
-la tâche distante, en respectant le pic déclaré. Les outils disponibles sont Python,
-Node.js 22, npm et Git, sur Linux ARM64. Le code dépendant de macOS, Metal/MLX ou d'un
-GPU doit utiliser une machine compatible. Les conteneurs ne disposent pas du socket Docker.
+The Mac widget uses SwiftUI/AppKit, keeps one SSH request in flight and stops
+polling while hidden. It shows unavailable readings honestly. No Electron
+runtime or local web server is needed. [Build and install it](docs/widget.md).
 
-Avant une écriture de plus de 1 Gio **dans une tâche distante**, utiliser le garde
-livré dans le conteneur :
-
-```sh
-rtk proxy python3 /Users/guillaumegaillard/.local/bin/storage-guard.py --volume . --require-gib 2
-```
-
-Il vérifie simultanément la place physique, le quota et le pic restant déclaré
-pour cette tâche. Sur le Mac, le script canonique conserve les réserves locales
-de 50/20 Gio ; l'exception de 512 Mio concerne seulement le volume dédié du VPS.
-Un tampon technique de 1 Mio permet de conserver le reçu d'échec si le quota
-est atteint ; il est recréé après libération, sans supprimer de données de travail.
-
-Une tâche retourne son identifiant, son code de sortie et son statut réel.
-Pour rapatrier un résultat, sous le même encadrement `workspace-budget.py run` :
-
-```sh
-rtk proxy python3 /Users/guillaumegaillard/.local/bin/workspace-budget.py --temp-gib 0.6 run /chemin/projet -- rtk proxy python3 /Users/guillaumegaillard/Documents/ChatGPT/usevps/vps.py fetch IDENTIFIANT work/resultat.json stdout.log receipt.json
-```
-
-Le téléchargement, limité à 256 Mio par opération, vérifie un manifeste SHA256.
-Il crée un répertoire neuf dans `TASK_WORKSPACE` et n'écrase aucun résultat existant.
-Les sources et résultats distants restent présents jusqu'à confirmation :
-
-```sh
-rtk proxy python3 vps.py release IDENTIFIANT --confirmed
-```
-
-Récupérer et conserver les résultats utiles avant cette commande. Un manque de
-place bloque les tâches suivantes ; aucune purge automatique de données utiles.
-Les snapshots serveur Hetzner ne couvrent pas ce volume additionnel.
-
-## Validation et déploiement
-
-`scripts/checks.py` exécute toute la suite unitaire, construit l'image puis démarre
-le vrai service pour tester transfert, calcul, retour vérifié, arrêt sur timeout et
-plafond des journaux. Préfixer cette commande par `workspace-budget.py run` en local.
-Un démon Docker existant peut être utilisé via `DOCKER_HOST=ssh://root@coolifyx.progsoft.eu`.
-
-La CI GitHub `checks` exécute la même suite. Intégrer par pull request après CI verte
-sur la dernière révision et branche à jour, puis déployer cette révision dans Coolify.
-L'offre GitHub Free du compte ne permet pas les protections sur ce dépôt privé
-(API de protection : HTTP 403) ; le passage par PR et les contrôles restent obligatoires.
-
-Installer le hook local avec `rtk git config --local core.hooksPath .githooks`.
-Il bloque les poussées directes vers main/master ainsi que le préfixe de branche
-interdit. Son activation reste propre à ce dépôt ; la CI complète reste requise.
-
-Le hook administrateur `ops/deploy_lock.py --hold` prend le même verrou que les
-calculs et refuse immédiatement si une tâche est active. Maintenir ce processus
-au premier plan pendant un déploiement Coolify ; les nouvelles tâches attendent
-ou sont refusées sans démarrer. Envoyer `release` sur son entrée après la fin du
-déploiement et le retour d'une santé valide. Une fermeture de la connexion libère
-le verrou ; vérifier alors l'état du déploiement avant de reprendre. Le hook
-installé est `/usr/local/lib/usevps/deploy_lock.py`, réservé à l'administration.
-
-Le buildpack Docker Compose doit conserver les limites et les neuf bind mounts du fichier
-`docker-compose.yaml`. Aucun déplacement du répertoire Docker global du serveur.
-Les petites couches du lanceur restent sur le disque système Docker ; logiciels,
-fichiers de travail, dépendances et caches vont sur le volume ajouté. Les sept
-montages de logiciels sont tous en lecture seule ; seul `/workspace` est writable.
-
-Pour préparer les outils, exécuter `ops/provision_env.py` comme administrateur
-sur un répertoire neuf, après le contrôle de stockage du volume cible. Le script
-vérifie les téléchargements, refuse un dossier existant non identifié, empêche le
-démarrage de services pendant l'installation et conserve un manifeste. Une version
-prête est réutilisée ; ne pas la modifier pendant qu'un conteneur l'utilise. Un
-changement de versions nécessite une préparation isolée puis une bascule validée.
-La CI Linux prépare son environnement temporaire dans `TASK_WORKSPACE`, exécute
-les vraies recettes et conserve uniquement les petites preuves d'intégration.
+Made by Guillaume Gaillard. [MIT licensed](LICENSE).

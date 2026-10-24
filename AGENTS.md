@@ -4,8 +4,12 @@ Lire `README.md` avant une modification. Ces règles sont également incluses en
 lecture seule dans l'image, à `/app/AGENTS.md`.
 
 - Utiliser le compte SSH restreint et le client fournis. Vérifier le statut réel
-  avant une tâche ; conserver le verrou partagé, la limite d'une tâche active et
+  avant une tâche ; conserver les réservations atomiques, au plus quatre tâches et
   l'attente bornée. Aucun shell hôte, socket Docker ou autre worker de débordement.
+- Privilégier ce pool pour les travaux compatibles Linux ARM64 ; utiliser les
+  outils MCP `atelier-vps` quand ils sont disponibles. Déclarer CPU, RAM et pic
+  disque par tâche. `busy` peut être vrai en même temps que `admit` : il reste
+  alors une part disponible. Respecter les réservations et les refus réels.
 - Préserver les projets existants. Conserver le volume ajouté distinct du disque
   système : tout le volume ajouté est dédié au service ; quota dur calculé sur
   toute la place restante après les logiciels, marge physique de 512 Mio,
@@ -26,7 +30,7 @@ lecture seule dans l'image, à `/app/AGENTS.md`.
   x86 ne fonctionnent pas sur ce VPS ARM64 : conserver émulateurs/NDK concernés
   sur le Mac. Ne déclarer aucune recette Android appareil sans appareil réel.
 - Avant une écriture distante de plus de 1 Gio, lancer le garde livré dans l'image
-  à `/Users/guillaumegaillard/.local/bin/storage-guard.py` via RTK, dans le calcul
+  à `/app/storage-guard.py` via RTK, dans le calcul
   dont le pic est déclaré. Il contrôle quota, réserve et budget restant de cette
   tâche. Les gardes locaux du Mac et leurs réserves restent inchangés.
 - Les hooks de démarrage et de santé doivent vérifier l'identité, le volume et
@@ -39,8 +43,16 @@ lecture seule dans l'image, à `/app/AGENTS.md`.
   incomplet ne constitue jamais une réussite. Préserver les reçus d'échec et
   nettoyer seulement les descendants du calcul concerné.
 - Récupérer les résultats avec vérification SHA256 et préserver les données utiles
-  avant une libération explicite, uniquement hors calcul. Aucun nettoyage
+  avant une libération explicite de cette tâche terminée. Les autres calculs
+  peuvent continuer. Aucun nettoyage
   automatique des résultats, données personnelles ou caches encore utiles.
+- Fournir un libellé public avec `run --agent "nom court de la tâche"` pour le
+  widget Mac. Le statut expose seulement des compteurs et huit activités publiques,
+  sans commandes ni secrets. Garder cette télémétrie facultative indépendante des
+  contrôles d'admission ; aucun port ni service de surveillance supplémentaire.
+  Le widget natif utilise seulement `status`, un délai court et la connexion SSH
+  existante. Vérifier le build macOS et son rendu réel, avec les budgets locaux,
+  en plus de toute la suite Linux avant une poussée.
 - Ne jamais lire ni transférer de fichier `CLAUDE.md`. Ne jamais versionner ou
   afficher une clé privée, un jeton, un fichier d'environnement ou autre secret.
 - Exécuter toute la suite CI dans `scripts/checks.py`, incluant les vrais services

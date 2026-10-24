@@ -7,10 +7,10 @@ import shutil
 import subprocess
 import sys
 
-MOUNT = Path("/mnt/HC_Volume_107251752")
+MOUNT = Path(os.environ.get('USEVPS_VOLUME_MOUNT', '/mnt/atelier-vps'))
 WORKSPACE = MOUNT / "usevps"
-VOLUME_ID = "527e635e-42d5-46e9-861d-643af1626668"
-PROJECT_ID = 34110
+VOLUME_ID = os.environ.get('USEVPS_VOLUME_ID', '')
+PROJECT_ID = int(os.environ.get('USEVPS_PROJECT_ID', '34110'))
 GIB = 1024 ** 3
 MIB = 1024 ** 2
 RESERVE_BYTES = GIB // 2
@@ -50,6 +50,8 @@ def fstab_with_quota(text):
 def main():
     if sys.argv[1:] != ["--apply"] or os.geteuid() != 0:
         raise ValueError("root and --apply are required")
+    if not VOLUME_ID or MOUNT == Path('/') or not MOUNT.is_absolute():
+        raise ValueError('explicit added-volume mount and UUID are required')
     mounted_id = run(["findmnt", "-n", "-o", "UUID", "--mountpoint", str(MOUNT)]).strip()
     if mounted_id != VOLUME_ID:
         raise ValueError("volume identity mismatch")

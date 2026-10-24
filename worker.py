@@ -17,6 +17,8 @@ import threading
 import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from telemetry import process_token, public_label, record_activity, snapshot
+import resources
 
 GIB = 1024 ** 3
 MIB = 1024 ** 2
@@ -41,9 +43,16 @@ def safe_path(name):
 
 def usage(path):
     total, count = 0, 0
-    for base, dirs, files in os.walk(path, followlinks=False, onerror=lambda e: (_ for _ in ()).throw(e)):
+    def missing_only(error):
+        if error.errno != errno.ENOENT:
+            raise error
+    for base, dirs, files in os.walk(path, followlinks=False, onerror=missing_only):
         for name in dirs + files:
-            s = (Path(base) / name).lstat()
+            try:
+                s = (Path(base) / name).lstat()
+            except FileNotFoundError:
+                # Atomic lease/cache replacements and independent releases are normal.
+                continue
             total += s.st_blocks * 512
             count += 1
             if count > 500000:
@@ -81,7 +90,7 @@ def validate_environment():
 
 
 def is_busy():
-    with (ROOT / ".queue.lock").open("a") as lock:
+    with (ROOT / '.queue.lock').open('a') as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             return False
@@ -89,7 +98,7 @@ def is_busy():
             return True
 
 
-def status():
+def capacity():
     if not volume_ok():
         raise RuntimeError("volume identity mismatch")
     # ext4 project quotas clamp statvfs inside ROOT to the project allowance.
@@ -107,14 +116,25 @@ def status():
     used = ((q.f_blocks - q.f_bfree) * q.f_frsize
             if q.f_blocks < s.f_blocks else usage(ROOT))
     ram = available_ram()
-    busy = is_busy()
-    reserve_ram = int(float(os.environ.get("USEVPS_HOST_RAM_RESERVE_GIB", "2")) * GIB)
     return {"ok": True, "volume_id": os.environ["USEVPS_VOLUME_ID"],
             "free_bytes": free, "workspace_free_bytes": workspace_free,
             "used_bytes": used, "reserve_bytes": reserve,
-            "budget_bytes": budget, "host_available_ram": ram, "busy": busy,
-            "admit": (not busy and ram >= reserve_ram + 256 * MIB
-                      and free > reserve + MIB and workspace_free > MIB and used < budget - MIB)}
+            "budget_bytes": budget, "host_available_ram": ram}
+
+
+def status():
+    state = capacity()
+    with resources.resource_lock(ROOT):
+        pool = resources.view(ROOT, state)
+    with (ROOT / '.queue.lock').open('a') as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            maintenance = False
+        except BlockingIOError:
+            maintenance = True
+    state.update(pool=pool, busy=bool(pool['active_count']) or maintenance, maintenance=maintenance,
+                 admit=not maintenance and resources.fits(pool, 1, 64 * MIB, MIB))
+    return state
 
 
 def extract(stream, target):
@@ -187,6 +207,7 @@ def receipt(path, data):
         reserve.unlink()
         tmp.write_text(json.dumps(data))
     tmp.replace(path / "receipt.json")
+    record_activity(ROOT, data)
 
 
 def descendants():
@@ -217,39 +238,52 @@ def stop_children():
             time.sleep(0.5)
 
 
+def process_memory(pids):
+    total = 0
+    for pid in pids:
+        try:
+            # PSS counts shared libraries once across cooperating worker processes.
+            lines = (Path('/proc') / str(pid) / 'smaps_rollup').read_text().splitlines()
+            total += next(int(line.split()[1]) * 1024 for line in lines if line.startswith('Pss:'))
+        except FileNotFoundError:
+            continue
+        except (OSError, StopIteration):
+            try:
+                lines = (Path('/proc') / str(pid) / 'status').read_text().splitlines()
+                total += next(int(line.split()[1]) * 1024 for line in lines if line.startswith('VmRSS:'))
+            except (OSError, StopIteration):
+                continue
+    return total
+
+
 def run_job(request, stream):
     argv = request.get("argv")
     timeout = request.get("timeout", 1800)
     peak = request.get("disk_bytes", GIB)
+    agent = public_label(request.get("agent"), "Agent non identifié")
+    project = public_label(request.get("project"), "Projet non identifié")
     if not isinstance(argv, list) or not argv or not all(isinstance(x, str) and "\x00" not in x for x in argv):
         raise ValueError("argv must be a nonempty string array")
     if not isinstance(timeout, int) or not 1 <= timeout <= 3600:
         raise ValueError("timeout must be 1..3600 seconds")
     if not isinstance(peak, int) or not 0 < peak <= JOB_LIMIT:
         raise ValueError("declared disk peak must fit the dedicated volume (maximum 32 GiB)")
-    with (ROOT / ".queue.lock").open("a") as lock:
-        deadline = time.monotonic() + 30
-        while True:
-            try:
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except BlockingIOError:
-                if time.monotonic() >= deadline:
-                    raise RuntimeError("busy: another task owns the worker")
-                time.sleep(0.2)
-        if not ensure_receipt_reserve():
-            raise RuntimeError("receipt headroom unavailable; retrieve and release completed jobs")
-        s = status()
+    ident = uuid.uuid4().hex
+    with resources.reserve(ROOT, ident, request, capacity) as lease:
+        with resources.resource_lock(ROOT):
+            if not ensure_receipt_reserve():
+                raise RuntimeError("receipt headroom unavailable; retrieve and release completed jobs")
+            cache = ROOT / 'cache'
+            cache.mkdir(exist_ok=True)
+            if not (ROOT / '.cache-accounting.json').exists():
+                resources.write_json(ROOT / '.cache-accounting.json', usage(cache))
         reserve_ram = int(float(os.environ.get("USEVPS_HOST_RAM_RESERVE_GIB", "2")) * GIB)
-        if s["free_bytes"] - peak < s["reserve_bytes"] or s["workspace_free_bytes"] < peak + MIB or s["used_bytes"] + peak > s["budget_bytes"] - MIB:
-            raise RuntimeError("disk budget unavailable; retrieve and release completed jobs")
-        if s["host_available_ram"] < reserve_ram + 256 * MIB:
-            raise RuntimeError("host memory reserve unavailable")
-        initial_used = s["used_bytes"]
-        path = ROOT / "jobs" / uuid.uuid4().hex
+        path = ROOT / "jobs" / ident
         work = path / "work"
         work.mkdir(parents=True)
-        result = {"id": path.name, "status": "running", "argv": argv, "started": time.time()}
+        result = {"id": path.name, "status": "running", "argv": argv, "started": time.time(),
+                  "agent": agent, "project": project, "runner": process_token(os.getpid()),
+                  "reservation": {k: lease.value[k] for k in ('cpus', 'ram_bytes', 'disk_bytes')}}
         receipt(path, result)
         try:
             extract(stream, work)
@@ -261,7 +295,8 @@ def run_job(request, stream):
                        npm_config_cache=str(ROOT / "cache" / "npm"),
                        npm_config_store_dir=str(ROOT / "cache" / "pnpm"),
                        UV_CACHE_DIR=str(ROOT / "cache" / "uv"), GRADLE_USER_HOME=str(ROOT / "cache" / "gradle"),
-                       USEVPS_JOB_DISK_BYTES=str(peak), USEVPS_JOB_INITIAL_USED=str(initial_used))
+                       USEVPS_JOB_DISK_BYTES=str(peak), USEVPS_JOB_ID=ident,
+                       USEVPS_CPU_CAPACITY=str(resources.cpu_capacity()))
             env["JAVA_TOOL_OPTIONS"] = (env.get("JAVA_TOOL_OPTIONS", "")
                                          + " -Djava.io.tmpdir=" + str(work / ".tmp")
                                          + " -Duser.home=" + str(work / ".home")).strip()
@@ -295,30 +330,42 @@ def run_job(request, stream):
             reader.start()
             start = time.monotonic()
             reason = None
+            def measure():
+                state = capacity()
+                pids = descendants()
+                lease.update(process_memory(pids | {os.getpid()}), usage(path), pids, usage(cache))
+                if state['free_bytes'] < state['reserve_bytes'] or state['used_bytes'] > state['budget_bytes'] or lease.value['disk_used'] > peak:
+                    return state, 'disk limit'
+                if lease.value['ram_used'] > lease.value['ram_bytes']:
+                    return state, 'task memory limit'
+                if state['host_available_ram'] < reserve_ram:
+                    return state, 'host memory pressure'
+                return state, None
             while proc.poll() is None:
-                s = status()
+                _, resource_reason = measure()
                 if overflow.is_set():
                     reason = "log limit"
                 elif time.monotonic() - start > timeout:
                     reason = "timeout"
-                elif s["free_bytes"] < s["reserve_bytes"] or s["used_bytes"] > s["budget_bytes"] or s["used_bytes"] - initial_used > peak:
-                    reason = "disk limit"
-                elif s["host_available_ram"] < reserve_ram:
-                    reason = "host memory pressure"
+                elif resource_reason:
+                    reason = resource_reason
                 if reason:
                     break
                 time.sleep(0.5)
+            # Measure before cleanup too: a very short task must not evade its guard.
+            _, resource_reason = measure()
+            reason = reason or resource_reason
             stop_children()
             rc = proc.wait(timeout=5)
             reader.join(timeout=5)
             if overflow.is_set():
                 reason = "log capture failed" if capture_error else "log limit"
-            final = status()
-            if final["free_bytes"] < final["reserve_bytes"] or final["used_bytes"] > final["budget_bytes"] or final["used_bytes"] - initial_used > peak:
-                reason = "disk limit"
+            final, resource_reason = measure()
+            reason = reason or resource_reason
             result.update(status="passed" if rc == 0 and not reason else "failed",
                           returncode=rc, reason=reason, ended=time.time(),
-                          resources={"declared_disk_bytes": peak, "growth_bytes": final["used_bytes"] - initial_used,
+                          resources={"declared_disk_bytes": peak, "growth_bytes": lease.value['disk_used'],
+                                     "ram_bytes": lease.value['ram_used'], "cpus": lease.value['cpus'],
                                      "total_used_bytes": final["used_bytes"], "physical_free_bytes": final["free_bytes"]})
         except Exception as exc:
             stop_children()
@@ -367,15 +414,22 @@ def fetch(request, stream):
 
 
 def release_job(request):
-    # Cleanup and execution share the same lock so admission snapshots stay valid.
+    # Shared deployment lock permits independent completed-task cleanup during work.
     with (ROOT / ".queue.lock").open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        path = job_path(request["id"])
-        if json.loads((path / "receipt.json").read_text())["status"] == "running":
-            raise ValueError("cannot release active task")
+        fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        with resources.resource_lock(ROOT):
+            path = job_path(request["id"])
+            if (any(r['id'] == path.name for r in resources.leases(ROOT))
+                    or json.loads((path / "receipt.json").read_text())["status"] == "running"):
+                raise ValueError("cannot release active task")
+            original = path.name
+            trash = ROOT / ('.released-' + original)
+            path.rename(trash)
+            path = trash
         shutil.rmtree(path)
-        ensure_receipt_reserve()
-        return {"released": path.name}
+        with resources.resource_lock(ROOT):
+            ensure_receipt_reserve()
+        return {"released": original}
 
 
 def main():
@@ -390,6 +444,8 @@ def main():
             if data.get("status") == "running":
                 data.update(status="failed", reason="worker restarted", returncode=1, ended=time.time())
                 receipt(state.parent, data)
+        for expired in (ROOT / '.leases').glob('*.json'):
+            expired.unlink()
         class Health(BaseHTTPRequestHandler):
             def do_GET(self):
                 try:
@@ -408,7 +464,9 @@ def main():
                 pass
         ThreadingHTTPServer(("0.0.0.0", 8080), Health).serve_forever()
     elif action == "status":
-        print(json.dumps(status()))
+        result = status()
+        result['telemetry'] = snapshot(ROOT, result['busy'])
+        print(json.dumps(result))
     elif action == "run":
         result = run_job(read_request(), sys.stdin.buffer)
         print(json.dumps(result))
