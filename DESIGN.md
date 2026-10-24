@@ -17,8 +17,10 @@ points high. Mini bars start at 400×96 points, with a minimum width of 340. The
 show CPU, RAM reservable now, committed RAM, slots and disk free. Expanding
 restores the full frame. Monitoring uses the same samples in both layouts.
 
-The RAM dial's value is reservable RAM, with the needle relative to its task
-envelope and warning ticks at the low end. Preserve its original analog style.
+The RAM dial's large value is reservable RAM. Its needle and percentage caption
+show actual task use divided by reserved plus still-reservable RAM: 0% when idle,
+unknown when task-use accounting is unavailable, warning ticks at the high end.
+Supervisor/cache memory does not imply an active task. Preserve the analog style.
 Distinguish ceiling, committed reservations and reservable RAM. Unknown values
 use a dash, offline values are dimmed and marked, and maintenance is explicit.
 Administrative rights come from the separate SSH identity, never a role toggle.

@@ -87,5 +87,5 @@
 "Mini bar layout" = "Format mini barre";
 "Administrator access" = "Accès administrateur";
 "RESERVABLE RAM" = "RAM RÉSERVABLE";
-"Available for new tasks" = "Pour de nouveaux calculs";
+"Task use %@" = "Occupation %@";
 "Committed" = "Engagée";

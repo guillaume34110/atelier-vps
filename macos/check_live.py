@@ -24,6 +24,11 @@ def main():
     assert result['source'] == 'real restricted SSH' and result['connected'] and result['samples'] >= 2
     assert result['controls_exercised'] is True
     assert result['status']['ok'] and 360 <= result['window_width'] <= 900 and result['window_height'] >= 180
+    pool = result['status']['pool']
+    used = pool['ram_accounting']['used_bytes']
+    budget = pool['ram_reserved'] + pool['ram_available']
+    expected = min(1, max(0, used / budget)) if budget else 0
+    assert result['ram_fraction'] is not None and abs(result['ram_fraction'] - expected) < 1e-9
     if args.require_telemetry:
         assert result['cpu_fraction'] is not None and 0 <= result['cpu_fraction'] <= 1
         assert result['status']['telemetry']['worker_ram_limit'] == 5 * 1024**3
@@ -39,7 +44,7 @@ def main():
     if args.admin:
         assert result['administrator_roundtrip_verified'] is True
     print(json.dumps({'native_live_render': 'passed', 'samples': result['samples'],
-                      'telemetry_verified': args.require_telemetry, 'image': str(image),
+                      'telemetry_verified': args.require_telemetry, 'ram_fraction': result['ram_fraction'], 'image': str(image),
                       'size': [result['window_width'], result['window_height']]}), flush=True)
 
 
