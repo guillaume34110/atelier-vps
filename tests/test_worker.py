@@ -26,6 +26,23 @@ def archive(entries):
 
 
 class ArchiveTests(unittest.TestCase):
+    def test_disk_measurement_tolerates_atomic_replacements_but_not_permission_errors(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            useful = root / 'useful.data'
+            useful.write_bytes(b'keep')
+            (root / '.lease-changing.tmp').write_bytes(b'technical')
+            original = Path.lstat
+            def transient(path):
+                if path.name == '.lease-changing.tmp':
+                    raise FileNotFoundError(path)
+                return original(path)
+            with patch.object(Path, 'lstat', transient):
+                self.assertEqual(worker.usage(root), useful.stat().st_blocks * 512)
+            with patch.object(Path, 'lstat', side_effect=PermissionError('blocked')):
+                with self.assertRaises(PermissionError):
+                    worker.usage(root)
+
     def test_reject_paths_and_links(self):
         for name in ("../escape", "/etc/passwd", "foo/../../escape", "CLAUDE.md", ".git/config"):
             with self.subTest(name=name), self.assertRaises(ValueError):
@@ -52,6 +69,9 @@ class ArchiveTests(unittest.TestCase):
             root = Path(tmp)
             (root / "main.py").write_text("print(1)")
             (root / ".env").write_text("secret")
+            (root / 'deployment.local.json').write_text('{"private":"endpoint"}')
+            (root / 'credentials.json').write_text('{"private":"credential fixture"}')
+            (root / 'id_ed25519_fixture').write_text('not a private key')
             (root / "node_modules").mkdir()
             (root / "node_modules/package").write_text("dependency")
             (root / "external").symlink_to("/etc/passwd")
@@ -98,13 +118,14 @@ class AdmissionTests(unittest.TestCase):
                 self.assertTrue(s["admit"])
                 with patch.object(worker, "available_ram", return_value=worker.GIB):
                     self.assertFalse(worker.status()["admit"])
-                with patch.object(worker, "is_busy", return_value=True):
+                with (Path(tmp) / '.queue.lock').open('a') as lock:
+                    fcntl.flock(lock, fcntl.LOCK_EX)
                     self.assertFalse(worker.status()["admit"])
 
     def test_insufficient_project_quota_rejects_before_extract(self):
         s = {"free_bytes": 27 * worker.GIB, "reserve_bytes": 20 * worker.GIB,
              "workspace_free_bytes": worker.GIB // 2, "budget_bytes": 27 * worker.GIB, "used_bytes": 0, "host_available_ram": 5 * worker.GIB}
-        with tempfile.TemporaryDirectory() as tmp, patch.object(worker, "ROOT", Path(tmp)), patch.object(worker, "status", return_value=s):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(worker, "ROOT", Path(tmp)), patch.object(worker, "capacity", return_value=s), patch.dict(worker.os.environ, {'USEVPS_QUEUE_WAIT_SECONDS': '0'}):
             with self.assertRaises(RuntimeError), patch.object(worker, "extract") as extract:
                 worker.run_job({"argv": ["true"]}, io.BytesIO())
             extract.assert_not_called()
@@ -133,7 +154,7 @@ class AdmissionTests(unittest.TestCase):
     def test_no_disk_headroom_rejects_before_extract(self):
         s = {"free_bytes": 20 * worker.GIB, "reserve_bytes": 20 * worker.GIB,
              "workspace_free_bytes": 7 * worker.GIB, "budget_bytes": 27 * worker.GIB, "used_bytes": 0, "host_available_ram": 5 * worker.GIB}
-        with tempfile.TemporaryDirectory() as tmp, patch.object(worker, "ROOT", Path(tmp)), patch.object(worker, "status", return_value=s):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(worker, "ROOT", Path(tmp)), patch.object(worker, "capacity", return_value=s), patch.dict(worker.os.environ, {'USEVPS_QUEUE_WAIT_SECONDS': '0'}):
             with self.assertRaises(RuntimeError), patch.object(worker, "extract") as extract:
                 worker.run_job({"argv": ["true"]}, io.BytesIO())
             extract.assert_not_called()
@@ -141,7 +162,7 @@ class AdmissionTests(unittest.TestCase):
     def test_no_memory_headroom_rejects_before_extract(self):
         s = {"free_bytes": 30 * worker.GIB, "reserve_bytes": 20 * worker.GIB,
              "workspace_free_bytes": 7 * worker.GIB, "budget_bytes": 27 * worker.GIB, "used_bytes": 0, "host_available_ram": worker.GIB}
-        with tempfile.TemporaryDirectory() as tmp, patch.object(worker, "ROOT", Path(tmp)), patch.object(worker, "status", return_value=s):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(worker, "ROOT", Path(tmp)), patch.object(worker, "capacity", return_value=s), patch.dict(worker.os.environ, {'USEVPS_QUEUE_WAIT_SECONDS': '0'}):
             with self.assertRaises(RuntimeError), patch.object(worker, "extract") as extract:
                 worker.run_job({"argv": ["true"]}, io.BytesIO())
             extract.assert_not_called()

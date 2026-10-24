@@ -1,0 +1,11 @@
+{
+  "github": "your-account/atelier-vps",
+  "host": "vps.example.com",
+  "ssh_alias": "dev-vps",
+  "ssh_user": "usevps",
+  "volume_mount": "/mnt/atelier-vps",
+  "volume_id": "REPLACE_WITH_REAL_EXT4_UUID",
+  "workspace": "/mnt/atelier-vps/usevps",
+  "toolchain_root": "/mnt/atelier-vps/.usevps-dev",
+  "reserve_gib": 0.5
+}

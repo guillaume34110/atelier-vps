@@ -18,7 +18,9 @@ def main():
     public = Path(sys.argv[1]).read_text().strip()
     if not public.startswith("ssh-ed25519 ") or len(public.split()) < 2:
         raise ValueError("expected an ed25519 public key")
-    public = " ".join(public.split()[:2]) + " guillaume34110/usevps"
+    public = " ".join(public.split()[:2]) + " atelier-vps"
+    if not VOLUME_ID:
+        raise ValueError('USEVPS_VOLUME_ID must identify the prepared added volume')
     config = Path("/etc/usevps-gateway.json")
     try:
         user = pwd.getpwnam("usevps")

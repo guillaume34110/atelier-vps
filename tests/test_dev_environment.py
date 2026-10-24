@@ -32,7 +32,7 @@ class DevelopmentEnvironmentTests(unittest.TestCase):
     def test_write_guard_checks_declared_remaining_quota_and_physical_floor(self):
         s = {"workspace_free_bytes": 20 * worker.MIB, "free_bytes": 10 * worker.GIB,
              "reserve_bytes": worker.GIB // 2, "used_bytes": 2 * worker.MIB}
-        self.assertEqual(remaining_budget(s, 5 * worker.MIB, 0), 3 * worker.MIB)
+        self.assertEqual(remaining_budget(s, 5 * worker.MIB, 2 * worker.MIB), 3 * worker.MIB)
         self.assertEqual(remaining_budget({**s, "workspace_free_bytes": 2 * worker.MIB}, 5 * worker.MIB, 0), worker.MIB)
         self.assertLess(remaining_budget({**s, "free_bytes": worker.GIB // 4}, 5 * worker.MIB, 0), 0)
 

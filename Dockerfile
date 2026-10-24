@@ -3,8 +3,9 @@ RUN mkdir -p /rootfs/app /rootfs/usr /rootfs/bin /rootfs/sbin /rootfs/lib /rootf
 
 FROM scratch
 COPY --from=layout /rootfs/ /
-COPY worker.py AGENTS.md /app/
+COPY worker.py telemetry.py resources.py AGENTS.md /app/
 COPY ops/toolchain-lock.json /app/toolchain-lock.json
+COPY ops/worker_storage_guard.py /app/storage-guard.py
 COPY ops/worker_storage_guard.py /Users/guillaumegaillard/.local/bin/storage-guard.py
 ENV PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
     PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 USEVPS_ROOT=/workspace \

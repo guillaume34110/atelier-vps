@@ -1,5 +1,6 @@
 services:
   worker:
+    container_name: ateliervps-worker
     build: .
     restart: unless-stopped
     user: "10001:10001"
@@ -12,20 +13,12 @@ services:
     pids_limit: 256
     oom_score_adj: 500
     environment:
-      - USEVPS_VOLUME_ID=527e635e-42d5-46e9-861d-643af1626668
+      - USEVPS_VOLUME_ID=${USEVPS_VOLUME_ID:-configure-the-added-volume-uuid}
       - USEVPS_RESERVE_GIB=0.5
       - USEVPS_HOST_RAM_RESERVE_GIB=2
       - USEVPS_VOLUME_STATS=/volume-stat
-    volumes:
-      - /mnt/HC_Volume_107251752/usevps:/workspace
-      - /mnt/HC_Volume_107251752/.usevps-stat:/volume-stat:ro
-      - /mnt/HC_Volume_107251752/.usevps-dev/usr:/usr:ro
-      - /mnt/HC_Volume_107251752/.usevps-dev/usr/bin:/bin:ro
-      - /mnt/HC_Volume_107251752/.usevps-dev/usr/sbin:/sbin:ro
-      - /mnt/HC_Volume_107251752/.usevps-dev/usr/lib:/lib:ro
-      - /mnt/HC_Volume_107251752/.usevps-dev/usr/lib64:/lib64:ro
-      - /mnt/HC_Volume_107251752/.usevps-dev/etc:/etc:ro
-      - /mnt/HC_Volume_107251752/.usevps-dev/opt:/opt:ro
+    # Configure the nine explicit binds in Coolify, or generate a local override.
+    volumes: []
     logging:
       driver: json-file
       options:

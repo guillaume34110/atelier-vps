@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import subprocess
 import sys
 import tarfile
@@ -52,6 +53,18 @@ def payload(argv, files=None, **options):
     return out.getvalue()
 
 
+def ssh_frontends(parent):
+    rows = subprocess.check_output(['ps', '-axo', 'pid=,ppid=,comm='], text=True).splitlines()
+    entries = [line.split(None, 2) for line in rows if len(line.split(None, 2)) == 3]
+    owned = {parent}
+    while True:
+        new = {int(pid) for pid, ppid, _ in entries if int(ppid) in owned} - owned
+        if not new:
+            break
+        owned.update(new)
+    return [int(pid) for pid, _, name in entries if int(pid) in owned and Path(name).name == 'ssh']
+
+
 def main():
     root = Path(os.environ["TASK_WORKSPACE"])
     root.mkdir(parents=True, exist_ok=True)
@@ -59,9 +72,12 @@ def main():
     env["TMPDIR"] = str(root)
     command([sys.executable, "-m", "unittest", "discover", "-s", "tests", "-v"], cwd=REPO, env=env)
     print("Complete unit suite: passed", flush=True)
-    remote = os.environ.get("DOCKER_HOST") == "ssh://root@coolifyx.progsoft.eu"
+    remote = os.environ.get('DOCKER_HOST', '').startswith('ssh://')
+    remote_host = os.environ.get('DOCKER_HOST', '')[len('ssh://'):]
+    deployment = json.loads((REPO / 'ops/deployment.local.json').read_text()) if remote else {}
     local = not remote
-    dev = Path("/mnt/HC_Volume_107251752/.usevps-dev") if remote else root / "devroot"
+    volume = Path(deployment['volume_mount']) if remote else None
+    dev = Path(deployment['toolchain_root']) if remote else root / "devroot"
     if local:
         if sys.platform != "linux":
             raise RuntimeError("use the existing VPS Docker daemon; toolchain provisioning needs Linux")
@@ -74,8 +90,8 @@ def main():
     command(["docker", "compose", "-f", "docker-compose.yaml", "config", "--quiet"], cwd=REPO)
     command(["docker", "build", "-t", "usevps:checks", "."], cwd=REPO)
     print("Container build: passed", flush=True)
-    workspace = Path(tempfile.mkdtemp(prefix="container-", dir=root)) if local else Path("/mnt/HC_Volume_107251752/.usevps-qa-" + uuid.uuid4().hex)
-    capacity = Path(tempfile.mkdtemp(prefix="capacity-", dir=root)) if local else Path("/mnt/HC_Volume_107251752/.usevps-stat")
+    workspace = Path(tempfile.mkdtemp(prefix="container-", dir=root)) if local else volume / ('.usevps-qa-' + uuid.uuid4().hex)
+    capacity = Path(tempfile.mkdtemp(prefix="capacity-", dir=root)) if local else volume / '.usevps-stat'
     if local:
         capacity.chmod(0o000)
         workspace.chmod(0o777)
@@ -84,15 +100,15 @@ def main():
         setup = ("from pathlib import Path; import os; p=Path(" + repr(str(workspace)) + "); "
                  "assert os.statvfs(p.parent).f_bavail*os.statvfs(p.parent).f_frsize > 1024**3; "
                  "p.mkdir(mode=0o777); p.chmod(0o777); (p/'.volume-id').write_text('ci-volume')")
-        command(["ssh", "-o", "BatchMode=yes", "root@coolifyx.progsoft.eu", "python3", "-"], input=setup.encode())
+        command(["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", remote_host, "python3", "-"], input=setup.encode())
     name = "usevps-checks-" + uuid.uuid4().hex[:10]
     process = None
     evidence = root / "evidence"
     evidence.mkdir(exist_ok=True)
     try:
         process = subprocess.Popen(["docker", "run", "--rm", "--name", name, "--read-only",
-                                    "--cap-drop=ALL", "--security-opt=no-new-privileges:true", "--memory=768m",
-                                    "--memory-swap=768m", "--pids-limit=256", "--cpus=1", *mounts,
+                                    "--cap-drop=ALL", "--security-opt=no-new-privileges:true", "--memory=2g",
+                                    "--memory-swap=2g", "--pids-limit=256", "--cpus=2", *mounts,
                                     "--publish", "127.0.0.1::8080", "--volume", str(workspace) + ":/workspace",
                                     "--volume", str(capacity) + ":/volume-stat:ro", "--env", "USEVPS_VOLUME_STATS=/volume-stat",
                                     "--env", "USEVPS_VOLUME_ID=ci-volume", "usevps:checks"],
@@ -127,9 +143,16 @@ def main():
         assert bad.returncode != 0 and b"capacity probe is missing" in bad.stdout + bad.stderr, bad.stderr[-1000:]
         capacity_status = json.loads(execute(name, "status"))
         assert capacity_status["admit"] and capacity_status["workspace_free_bytes"] > 0, capacity_status
+        metrics = capacity_status['telemetry']
+        assert metrics['cpu_total'] > 0 and metrics['host_total_ram'] > 0, metrics
+        assert metrics['worker_ram_limit'] == 2 * 1024 ** 3 and metrics['worker_ram'] > 0, metrics
         task = json.loads(execute(name, "run", payload(["python3", "-c",
-                           "from pathlib import Path; assert Path('/proc/self/oom_score_adj').read_text().strip()=='500'; Path('result.txt').write_text(str(int(Path('input.txt').read_text())*2))"])))
+                           "from pathlib import Path; assert Path('/proc/self/oom_score_adj').read_text().strip()=='500'; Path('result.txt').write_text(str(int(Path('input.txt').read_text())*2))"],
+                           agent='CI · transfert vérifié', project='usevps')))
         assert task["status"] == "passed", task
+        recent = json.loads(execute(name, 'status'))['telemetry']['activity'][0]
+        assert recent['id'] == task['id'] and recent['agent'] == 'CI · transfert vérifié' and recent['status'] == 'passed', recent
+        assert 'argv' not in recent and 'resources' not in recent, recent
         assert task["resources"]["growth_bytes"] <= task["resources"]["declared_disk_bytes"], task
         data = execute(name, "fetch", json.dumps({"id": task["id"], "paths": ["work/result.txt", "receipt.json"]}).encode() + b"\n")
         archive = root / "roundtrip.tar"
@@ -156,6 +179,56 @@ def main():
         execute(name, "release", json.dumps({"id": fast["id"]}).encode() + b"\n")
         print("Timeout, task cleanup and strict log cap: passed", flush=True)
         print("Startup and fast-completion resource hooks: passed", flush=True)
+        seed = json.loads(execute(name, 'run', payload(['true'])))
+        parallel = []
+        try:
+            for label in ['CI · calcul A', 'CI · calcul B']:
+                child = subprocess.Popen(['docker', 'exec', '-i', '--user', '10001:10001', name,
+                                          *WORKER_EXEC, 'run'], stdin=subprocess.PIPE,
+                                         stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                program = "import time; from pathlib import Path\nwhile not Path('continue').exists(): time.sleep(0.2)\nprint(42)"
+                child.stdin.write(payload(['python3', '-c', program], timeout=120,
+                                          agent=label, ram_bytes=256 * 1024 ** 2))
+                child.stdin.close()
+                child.stdin = None
+                parallel.append(child)
+            for _ in range(30):
+                sharing = json.loads(execute(name, 'status'))
+                if sharing['pool']['active_count'] == 2:
+                    break
+                time.sleep(0.2)
+            assert sharing['pool']['active_count'] == 2, sharing
+            assert sharing['pool']['cpu_reserved'] == 2, sharing
+            assert sharing['pool']['ram_reserved'] == 512 * 1024 ** 2, sharing
+            execute(name, 'release', json.dumps({'id': seed['id']}).encode() + b'\n')
+            second_id = next(x['id'] for x in sharing['pool']['active'] if x['agent'] == 'CI · calcul B')
+            command(['docker', 'exec', name, 'python3', '-c',
+                     "from pathlib import Path; Path('/workspace/jobs/" + second_id + "/work/continue').touch()"])
+            second_out, second_err = parallel[1].communicate(timeout=30)
+            second = json.loads(second_out)
+            assert parallel[1].returncode == 0 and second['status'] == 'passed', second_err
+            execute(name, 'release', json.dumps({'id': second['id']}).encode() + b'\n')
+            memory = json.loads(execute(name, 'run', payload(['python3', '-c',
+                'import time; data=bytearray(256*1024**2); time.sleep(6)'], ram_bytes=64 * 1024 ** 2), success=False))
+            assert memory['reason'] == 'task memory limit', memory
+            execute(name, 'release', json.dumps({'id': memory['id']}).encode() + b'\n')
+            assert json.loads(execute(name, 'status'))['pool']['active_count'] == 1
+            first_id = next(x['id'] for x in sharing['pool']['active'] if x['agent'] == 'CI · calcul A')
+            command(['docker', 'exec', name, 'python3', '-c',
+                     "from pathlib import Path; Path('/workspace/jobs/" + first_id + "/work/continue').touch()"])
+            first_out, first_err = parallel[0].communicate(timeout=30)
+            first = json.loads(first_out)
+            assert parallel[0].returncode == 0 and first['status'] == 'passed', first_err
+            execute(name, 'release', json.dumps({'id': first['id']}).encode() + b'\n')
+            (evidence / 'sharing-proof.json').write_text(json.dumps({'two_jobs': True, 'isolated_memory_stop': True,
+                'release_while_running': True, 'reserved_cpu': sharing['pool']['cpu_reserved'],
+                'reserved_ram': sharing['pool']['ram_reserved']}))
+            print('Concurrent reservations, independent cleanup and per-task memory guard: passed', flush=True)
+        finally:
+            for child in parallel:
+                if child.poll() is None:
+                    child.terminate()
+                    child.communicate(timeout=10)
         for file, argv, peak in [("browser-check.js", ["node", "browser-check.js"], 128),
                                  ("python-check.py", ["python3", "python-check.py"], 128),
                                  ("java-check.py", ["python3", "java-check.py"], 512)]:
@@ -174,7 +247,7 @@ def main():
             proof_archive.unlink()
             execute(name, "release", json.dumps({"id": job["id"]}).encode() + b"\n")
             print(file + ": real toolchain scenario passed", flush=True)
-        checked_guard = json.loads(execute(name, "run", payload(["rtk", "proxy", "python3", "/Users/guillaumegaillard/.local/bin/storage-guard.py", "--volume", ".", "--require-gib", "0.001"])))
+        checked_guard = json.loads(execute(name, "run", payload(["rtk", "proxy", "python3", "/app/storage-guard.py", "--volume", ".", "--require-gib", "0.001"])))
         assert checked_guard["status"] == "passed", checked_guard
         execute(name, "release", json.dumps({"id": checked_guard["id"]}).encode() + b"\n")
         shutil.rmtree(dest)
@@ -182,7 +255,20 @@ def main():
     finally:
         subprocess.run(["docker", "stop", "--time", "5", name], capture_output=True, timeout=15)
         if process:
-            process.wait(timeout=15)
+            try:
+                process.communicate(timeout=15)
+            except subprocess.TimeoutExpired:
+                state = subprocess.run(['docker', 'inspect', name], capture_output=True, timeout=15)
+                if state.returncode == 0 and json.loads(state.stdout)[0]['State']['Running']:
+                    raise RuntimeError('QA container is still running; preserve its workspace')
+                # The fixture is stopped; close only its lingering local Docker/SSH frontend.
+                for pid in ssh_frontends(process.pid):
+                    try:
+                        os.kill(pid, signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass
+                process.terminate()
+                process.communicate(timeout=10)
         if local:
             cleanup_work = "import pathlib,shutil,sys; p=pathlib.Path(sys.argv[1]); assert p.name.startswith('container-') and (p/'.volume-id').read_text().strip()=='ci-volume'; shutil.rmtree(p)"
             command([*( ["sudo", "-n"] if os.geteuid() else []), sys.executable, "-c", cleanup_work, str(workspace)])
@@ -192,7 +278,7 @@ def main():
             command([*( ["sudo", "-n"] if os.geteuid() else []), sys.executable, "-c", cleanup_dev, str(dev)])
         else:
             cleanup = "from pathlib import Path; import shutil; p=Path(" + repr(str(workspace)) + "); assert p.name.startswith('.usevps-qa-'); shutil.rmtree(p)"
-            command(["ssh", "-o", "BatchMode=yes", "root@coolifyx.progsoft.eu", "python3", "-"], input=cleanup.encode())
+            command(["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", remote_host, "python3", "-"], input=cleanup.encode())
 
 
 if __name__ == "__main__":

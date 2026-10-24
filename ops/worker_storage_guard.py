@@ -11,10 +11,10 @@ sys.path.insert(0, "/app")
 import worker
 
 
-def remaining_budget(state, declared, initial_used):
+def remaining_budget(state, declared, task_used):
     return min(state["workspace_free_bytes"] - worker.MIB,
                state["free_bytes"] - state["reserve_bytes"],
-               declared - max(0, state["used_bytes"] - initial_used))
+               declared - max(0, task_used))
 
 
 def main():
@@ -29,8 +29,11 @@ def main():
     if "USEVPS_JOB_DISK_BYTES" not in os.environ:
         parser.error("run this check inside a task with a declared disk peak")
     state = worker.status()
-    remaining = remaining_budget(state, int(os.environ["USEVPS_JOB_DISK_BYTES"]),
-                                 int(os.environ["USEVPS_JOB_INITIAL_USED"]))
+    ident = os.environ['USEVPS_JOB_ID']
+    with worker.resources.resource_lock(worker.ROOT):
+        lease = next(r for r in worker.resources.leases(worker.ROOT) if r['id'] == ident)
+        used = worker.usage(worker.job_path(ident)) + lease.get('cache_bytes', 0)
+    remaining = remaining_budget(state, int(os.environ["USEVPS_JOB_DISK_BYTES"]), used)
     needed = math.ceil(args.require_gib * worker.GIB)
     ok = remaining >= needed
     print(json.dumps({"ok": ok, "remaining_bytes": remaining, "planned_bytes": needed,
