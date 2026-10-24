@@ -15,8 +15,10 @@ import time
 
 try:
     from . import team
+    from .deploy_lock import deployment_lock
 except ImportError:
     import team
+    from deploy_lock import deployment_lock
 
 STATE = Path('/etc/atelier-vps-team.json')
 BASE = Path('/etc/usevps-gateway.json')
@@ -202,9 +204,8 @@ def apply(state, policy, expected):
         # Acquire every affected workspace before changing any quota, app or access.
         for name in plan['affected']:
             if name in state['tenants']:
-                lock = stack.enter_context((Path(state['tenants'][name]['workspace']) / '.queue.lock').open('a'))
                 try:
-                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    stack.enter_context(deployment_lock(Path(state['tenants'][name]['workspace'])))
                 except BlockingIOError:
                     raise ValueError('active work prevents settings update: ' + name) from None
         save(PENDING, pending)
@@ -276,8 +277,7 @@ def main():
         if PENDING.exists() or name not in state['tenants'] or state['policy']['mode'] != 'allocated':
             raise ValueError('network repair requires an allocated developer and no pending transaction')
         tenant = state['tenants'][name]
-        with (Path(tenant['workspace']) / '.queue.lock').open('a') as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with deployment_lock(Path(tenant['workspace'])):
             network = isolate_network(name, tenant['container'])
             if network != tenant['network']:
                 raise ValueError('unexpected repaired network')

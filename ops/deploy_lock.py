@@ -5,13 +5,24 @@ import fcntl
 import json
 import os
 from pathlib import Path
+import stat
 import subprocess
 import sys
 
 
 @contextmanager
 def deployment_lock(workspace):
-    with (workspace / ".queue.lock").open("a") as lock:
+    path = workspace / '.queue.lock'
+    try:
+        fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        if os.geteuid() == 0:
+            os.fchown(fd, 10001, 10001)
+    except FileExistsError:
+        fd = os.open(path, os.O_RDWR | os.O_NOFOLLOW)
+    with os.fdopen(fd, 'a+') as lock:
+        info = os.fstat(lock.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_dev != workspace.stat().st_dev:
+            raise ValueError('deployment lock must be a regular workspace file')
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         yield
 

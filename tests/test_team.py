@@ -10,6 +10,7 @@ from unittest.mock import patch
 from types import SimpleNamespace
 
 from ops import gateway, team, team_settings as settings
+from ops.deploy_lock import deployment_lock
 import worker
 
 KEY = 'ssh-ed25519 ' + base64.b64encode(b'\x00\x00\x00\x0bssh-ed25519\x00\x00\x00\x20' + b'x' * 32).decode()
@@ -145,3 +146,17 @@ class TeamTests(unittest.TestCase):
             with self.assertRaises(PermissionError):
                 settings.main()
             read.assert_not_called()
+
+    def test_administrator_lock_never_follows_user_workspace_symlinks(self):
+        for existing in [True, False]:
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory); workspace = root / 'workspace'; workspace.mkdir()
+                outside = root / 'outside'
+                if existing:
+                    outside.write_text('preserve')
+                (workspace / '.queue.lock').symlink_to(outside)
+                with self.assertRaises(OSError), deployment_lock(workspace):
+                    pass
+                self.assertEqual(outside.exists(), existing)
+                if existing:
+                    self.assertEqual(outside.read_text(), 'preserve')

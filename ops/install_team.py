@@ -18,9 +18,11 @@ def main():
     target = Path('/usr/local/lib/usevps')
     target.mkdir(parents=True, exist_ok=True)
     source = Path(__file__).resolve().parent
-    for name in ['team.py', 'team_settings.py', 'coolify_team.js']:
+    for name in ['team.py', 'team_settings.py', 'coolify_team.js', 'deploy_lock.py']:
         file = target / name
         shutil.copyfile(source / name, file); file.chmod(0o644); os.chown(file, 0, 0)
+        if name == 'deploy_lock.py':
+            file.chmod(0o755)
     gateway = Path('/usr/local/libexec/usevps-gateway')
     shutil.copyfile(source / 'gateway.py', gateway); gateway.chmod(0o755); os.chown(gateway, 0, 0)
     helper = Path('/usr/local/libexec/atelier-settings')
