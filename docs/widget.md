@@ -15,8 +15,11 @@ writes a receipt and verifies an ad-hoc signature. Copy `usevps.app` to
 local server is installed.
 
 The original analog CPU dial shows authenticated worker use. The RAM dial shows
-RAM **reservable now**, normalized to the task envelope, with its warning marks
-at the low end. It does not present the container ceiling as available memory.
+RAM **reservable now** in large text. Its needle shows actual task RAM use divided
+by the current task envelope (reserved plus still reservable), with a percentage
+caption and warning marks at the high end. An idle pool reads 0%, even when worker
+supervisors or caches occupy memory. Missing usage readings remain unavailable.
+It does not present the container ceiling as available memory.
 Storage, reservations, agents and recent results belong to that same
 developer. Host/system disk and other developers' metrics are not displayed.
 The widget distinguishes the memory ceiling, committed reservations and RAM

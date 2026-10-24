@@ -133,7 +133,6 @@ private struct GaugeFace: View, Animatable {
     var level: Double
     var known: Bool
     var danger: Double
-    var warningBelow = false
     var animatableData: Double {
         get { level }
         set { level = newValue }
@@ -163,8 +162,7 @@ private struct GaugeFace: View, Animatable {
                 var line = Path()
                 line.move(to: point(value, tick % 5 == 0 ? 0.79 : 0.85))
                 line.addLine(to: point(value, 0.93))
-                let warning = warningBelow ? value <= 1 - danger : value >= danger
-                context.stroke(line, with: .color(warning ? Paint.orange : .black.opacity(0.78)), lineWidth: tick % 5 == 0 ? 1.2 : 0.65)
+                context.stroke(line, with: .color(value >= danger ? Paint.orange : .black.opacity(0.78)), lineWidth: tick % 5 == 0 ? 1.2 : 0.65)
                 if tick % 10 == 0 {
                     context.draw(Text("\(tick * 2)").font(.system(size: 10, weight: .semibold, design: .rounded)).foregroundColor(.black.opacity(0.8)),
                                  at: point(value, 0.65))
@@ -192,11 +190,10 @@ private struct Dial: View {
     let fraction: Double?
     let detail: String
     var danger: Double = 0.85
-    var warningBelow = false
 
     var body: some View {
         VStack(spacing: 2) {
-            GaugeFace(level: fraction ?? 0, known: fraction != nil, danger: danger, warningBelow: warningBelow)
+            GaugeFace(level: fraction ?? 0, known: fraction != nil, danger: danger)
                 .frame(height: 124)
                 .animation(.easeInOut(duration: 0.8), value: fraction)
             Text(title).font(.system(size: 11, weight: .bold)).tracking(1.2)
@@ -280,8 +277,8 @@ private struct WidgetView: View {
                             Dial(title: L("YOUR CPU"), value: percent(monitor.cpu.worker), fraction: monitor.cpu.worker,
                                  detail: LF("Limit %.2f vCPU", snapshot?.telemetry?.worker_cpu_limit ?? Double(snapshot?.pool?.cpu_total ?? 0)))
                             Dial(title: L("RESERVABLE RAM"), value: gib(snapshot?.pool?.ram_available) + " " + unit,
-                                 fraction: snapshot?.ramFraction,
-                                 detail: L("Available for new tasks"), warningBelow: true)
+                                 fraction: snapshot?.ramUsageFraction,
+                                 detail: LF("Task use %@", percent(snapshot?.ramUsageFraction)))
                         }.opacity(monitor.connected ? 1 : 0.5)
                         VStack(alignment: .leading, spacing: 7) {
                             Text(LF("Reservable now: %@ %@ RAM", gib(snapshot?.pool?.ram_available), unit))
@@ -381,7 +378,7 @@ private struct MiniWidget: View {
             }.buttonStyle(.plain)
             HStack(spacing: 10) {
                 metric("CPU", percent(monitor.cpu.worker), monitor.cpu.worker)
-                metric(L("Reservable"), gib(snapshot?.pool?.ram_available) + " " + L("GiB"), snapshot?.ramFraction)
+                metric(L("Reservable"), gib(snapshot?.pool?.ram_available) + " " + L("GiB"), snapshot?.ramUsageFraction)
                 metric(L("Committed"), gib(snapshot?.pool?.ram_reserved) + " " + L("GiB"), nil)
                 metric(L("Tasks"), "\(snapshot?.agents.count ?? 0)/\(snapshot?.pool?.max_jobs ?? 4)", Double(snapshot?.agents.count ?? 0) / Double(snapshot?.pool?.max_jobs ?? 4))
             }.opacity(monitor.connected ? 1 : 0.45)
@@ -650,6 +647,7 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 try png.write(to: path, options: .withoutOverwriting)
                 let evidence: [String: Any] = ["source": "real restricted SSH", "samples": monitor.successfulSamples,
                     "connected": monitor.connected, "cpu_fraction": monitor.cpu.worker.map { $0 as Any } ?? NSNull(),
+                    "ram_fraction": monitor.document?.ramUsageFraction.map { $0 as Any } ?? NSNull(),
                     "bundle": Bundle.main.bundlePath, "window_width": view.bounds.width, "window_height": view.bounds.height,
                     "controls_exercised": CommandLine.arguments.contains("--exercise-controls"),
                     "administrator_authenticated": administration.authorized,
