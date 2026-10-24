@@ -69,17 +69,20 @@ def allocations(policy, capacity):
                 raise ValueError('allocation percentages must be finite and positive')
             if enabled or key == 'disk_percent':
                 totals[key] += value
+        cpus = math.floor(pool['cpus'] * user['cpu_percent'] / 100 * 100000) / 100000
+        if cpus < 0.01:
+            raise ValueError('CPU allocation must be at least 0.01 vCPU')
         slots = user['slots']
         if type(slots) is not int or not 1 <= slots <= 4:
             raise ValueError('developer slots must be 1..4')
-        if slots > max(1, math.ceil(pool['cpus'] * user['cpu_percent'] / 100)):
+        if slots > max(1, math.ceil(cpus)):
             raise ValueError('developer slots exceed its CPU reservation units')
         totals['slots'] += slots if enabled else 0
         ram = int(pool['ram_bytes'] * user['ram_percent'] / 100) // MIB * MIB
         disk = int(pool['disk_bytes'] * user['disk_percent'] / 100) // MIB * MIB
         if ram < (slots * 64 + 128) * MIB or disk < 64 * MIB:
             raise ValueError('allocation must cover supervisors and a task workspace')
-        result[name] = {'enabled': enabled, 'cpus': pool['cpus'] * user['cpu_percent'] / 100,
+        result[name] = {'enabled': enabled, 'cpus': cpus,
                         'cpu_shares': max(2, int(128 * user['cpu_percent'] / 100)),
                         'ram_bytes': ram, 'disk_bytes': disk, 'slots': slots,
                         'inodes': max(1024, int(500000 * user['disk_percent'] / 100)),

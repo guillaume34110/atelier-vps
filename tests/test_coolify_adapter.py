@@ -41,6 +41,7 @@ configure({action:'configure',base_application:'base',application:'bob',tenant:'
         env = {c['body']['name']:c['body']['value'] for c in writes if c['path'].endswith('/secrets')}
         self.assertEqual(env['USEVPS_MEMORY_LIMIT'], '1073741824')
         self.assertEqual(env['USEVPS_CPU_LIMIT'], '0.5')
+        self.assertEqual(env['USEVPS_CPU_QUOTA'], '50000')
         self.assertEqual(env['USEVPS_TENANT'], 'bob')
         settings = next(c['body'] for c in writes if c['path'] == '/bob')
         self.assertEqual(settings['gitCommitHash'], 'a' * 40)

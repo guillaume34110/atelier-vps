@@ -25,6 +25,14 @@ def policy():
 
 
 class TeamTests(unittest.TestCase):
+    def test_cpu_uses_kernel_quota_precision_and_minimum(self):
+        value = policy()
+        value['users'][0].update(cpu_percent=33.333333, slots=1)
+        self.assertEqual(team.allocations(value, CAPACITY)['owner']['cpus'], 1.33333)
+        value['users'][0]['cpu_percent'] = 0.001
+        with self.assertRaisesRegex(ValueError, 'at least 0.01'):
+            team.allocations(value, CAPACITY)
+
     def test_percentages_have_explicit_denominators_and_disabled_data_stays_reserved(self):
         value = policy()
         result = team.allocations(value, CAPACITY)
