@@ -64,6 +64,7 @@ struct VPSSnapshot: Decodable {
     let telemetry: Telemetry?
     let pool: ResourcePool?
     var scope: UserScope? = nil
+    var maintenance: Bool? = nil
 
     static func decode(_ data: Data) throws -> VPSSnapshot {
         guard data.count <= 65536 else { throw MonitorError.invalidData }

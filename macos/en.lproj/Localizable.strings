@@ -11,6 +11,7 @@
 "Working" = "Working";
 "Ready" = "Ready";
 "Waiting" = "Waiting";
+"Maintenance" = "Maintenance";
 "Resources" = "Resources";
 "YOUR CPU" = "YOUR CPU";
 "YOUR RAM" = "YOUR RAM";
@@ -31,8 +32,8 @@
 "Failed" = "Failed";
 "Completed tasks appear here" = "Completed tasks appear here";
 "Dashboard" = "Dashboard";
-"Updated %d s ago · SSH %d ms" = "Updated %d s ago · SSH %d ms";
-"Offline · last sample %d s ago" = "Offline · last sample %d s ago";
+"Updated %@ · SSH %d ms" = "Updated %@ · SSH %d ms";
+"Offline · last sample %@" = "Offline · last sample %@";
 "GiB" = "GiB";
 "Always on top" = "Always on top";
 "Language" = "Language";

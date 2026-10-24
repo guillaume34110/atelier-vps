@@ -113,7 +113,7 @@ final class Monitor: ObservableObject {
         onUpdate?()
         if visible {
             timer?.invalidate()
-            let delay = failures > 0 ? min(60, 5 * pow(2, Double(min(failures - 1, 4)))) : (document?.busy == true || successfulSamples < 2 ? 5.0 : 30.0)
+            let delay = failures > 0 ? min(60, 5 * pow(2, Double(min(failures - 1, 4)))) : (document?.agents.isEmpty == false || successfulSamples < 2 ? 5.0 : 30.0)
             timer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in self?.refresh() }
             timer?.tolerance = delay * 0.1
         }
@@ -253,7 +253,7 @@ private struct WidgetView: View {
             HStack {
                 Text(L(snapshot?.scope?.mode == "allocated" ? "Your allocation" : "Available capacity"))
                 Spacer()
-                Text(L(!monitor.connected ? "Offline" : (snapshot?.busy == true ? "Working" : (snapshot?.admit == true ? "Ready" : "Waiting"))))
+                Text(L(!monitor.connected ? "Offline" : (snapshot?.maintenance == true ? "Maintenance" : (snapshot?.busy == true ? "Working" : (snapshot?.admit == true ? "Ready" : "Waiting")))))
             }.font(.system(size: 10)).foregroundColor(Paint.muted)
             ScrollView {
                 VStack(spacing: 10) {
@@ -331,8 +331,8 @@ private struct WidgetView: View {
     }
     private var freshness: String {
         guard let received = monitor.received else { return L(monitor.error) }
-        let age = max(0, Int(Date().timeIntervalSince(received)))
-        return monitor.connected ? LF("Updated %d s ago · SSH %d ms", age, Int(monitor.latency * 1000)) : LF("Offline · last sample %d s ago", age)
+        let timestamp = received.formatted(.dateTime.hour().minute().second().locale(Locale(identifier: UILanguage.code)))
+        return monitor.connected ? LF("Updated %@ · SSH %d ms", timestamp, Int(monitor.latency * 1000)) : LF("Offline · last sample %@", timestamp)
     }
 }
 
