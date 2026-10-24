@@ -125,6 +125,18 @@ def inspect(container):
     return json.loads(result.stdout)[0] if result.returncode == 0 else None
 
 
+def allocatable_ram(state):
+    available = next(int(line.split()[1]) * 1024 for line in Path('/proc/meminfo').read_text().splitlines() if line.startswith('MemAvailable:'))
+    current_used = 0
+    for tenant in state['tenants'].values():
+        info = inspect(tenant['container'])
+        if info and info['State']['Running']:
+            raw = command(['docker', 'exec', tenant['container'], 'cat', '/sys/fs/cgroup/memory.stat'])
+            # MemAvailable already credits reclaimable file cache; only add anonymous memory back.
+            current_used += int(dict(line.split() for line in raw.splitlines())['anon'])
+    return max(0, available + current_used - team.GIB)
+
+
 def preview(state, policy):
     base = read(BASE); verify_mount(base)
     limits = team.allocations(policy, state['capacity'])
@@ -143,17 +155,8 @@ def preview(state, policy):
     if sum(v['disk_bytes'] for v in limits.values()) > physical.f_bavail * physical.f_frsize + reusable - 512 * team.MIB:
         raise ValueError('disk allocations would consume the physical safety margin')
     if policy['mode'] == 'allocated':
-        available = next(int(line.split()[1]) * 1024 for line in Path('/proc/meminfo').read_text().splitlines() if line.startswith('MemAvailable:'))
-        current_used = 0
-        for tenant in state['tenants'].values():
-            info = inspect(tenant['container'])
-            if info and info['State']['Running']:
-                raw = command(['docker', 'exec', tenant['container'], 'cat', '/sys/fs/cgroup/memory.stat'])
-                # MemAvailable already credits reclaimable file cache: add back
-                # only anonymous memory that these workers would actually release.
-                current_used += int(dict(line.split() for line in raw.splitlines())['anon'])
-        if sum(v['ram_bytes'] for v in limits.values() if v['enabled']) > available + current_used - 2 * team.GIB:
-            raise ValueError('allocated RAM would consume the 2 GiB host floor; reduce the pool or wait')
+        if sum(v['ram_bytes'] for v in limits.values() if v['enabled']) > allocatable_ram(state):
+            raise ValueError('allocated RAM would consume the 1 GiB host floor; reduce the pool or wait')
     return {'policy': policy, 'allocations': limits, 'affected': affected,
             'revision': team.revision(state['policy']), 'candidate_revision': team.revision(policy)}
 
@@ -195,7 +198,7 @@ def apply(state, policy, expected):
     if expected != team.revision(state['policy']):
         raise ValueError('settings revision changed; preview again')
     plan = preview(state, policy)
-    pending = read(PENDING) if PENDING.exists() else {'candidate': plan['candidate_revision'],
+    pending = read(PENDING) if PENDING.exists() else {'candidate': plan['candidate_revision'], 'policy': policy,
                                                      'affected': plan['affected'], 'tenants': state['tenants']}
     if pending['candidate'] != plan['candidate_revision']:
         raise ValueError('another update is pending; resume that exact candidate before changing settings')
@@ -294,7 +297,8 @@ def main():
         if request['action'] == 'get':
             result = {'revision': team.revision(state['policy']), 'policy': state['policy'],
                       'capacity': state['capacity'], 'tenants': state['tenants'],
-                      'pending': read(PENDING) if PENDING.exists() else None}
+                      'pending': read(PENDING) if PENDING.exists() else None,
+                      'host_ram_reserve_bytes': team.GIB, 'allocatable_ram_bytes': allocatable_ram(state)}
         elif request['action'] == 'preview':
             result = preview(state, request['policy'])
         elif request['action'] == 'apply':

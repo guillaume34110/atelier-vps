@@ -59,7 +59,7 @@ without relocating global Docker storage. Ensure the generated Compose retains
 all `:ro` flags; verify actual container mounts before admitting work.
 
 Set application runtime values: `USEVPS_VOLUME_ID` to the real UUID,
-`USEVPS_RESERVE_GIB=0.5`, `USEVPS_HOST_RAM_RESERVE_GIB=2` and
+`USEVPS_RESERVE_GIB=0.5`, `USEVPS_HOST_RAM_RESERVE_GIB=1` and
 `USEVPS_VOLUME_STATS=/volume-stat`. The capacity probe is empty and inaccessible;
 it must never store data. Older Coolify versions may mishandle variable-based
 mount sources; explicit application binds avoid that substitution issue.

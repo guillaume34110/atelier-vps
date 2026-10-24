@@ -79,7 +79,7 @@ The legacy `usevps` launcher can keep pointing to the same client.
 | Neighbors | Low CPU priority, a host RAM floor and container limits protect other projects. |
 | Maintenance | An exclusive deployment lock waits for active jobs to finish. |
 
-The reference pool has 4 ARM64 vCPU, a 5 GiB container ceiling, a 2 GiB host RAM
+The reference pool has 4 ARM64 vCPU, a 5 GiB container ceiling, a 1 GiB host RAM
 floor and a dedicated 30 GiB volume. Shared tools occupy about 2 GiB; the rest
 has a hard ext4 workspace quota, with a 512 MiB physical margin. Always read
 **live status**: retained results and caches consume capacity. The original

@@ -92,7 +92,7 @@ class TeamTests(unittest.TestCase):
                  'tenants': {'owner': {'project_id': 34110, 'container': 'own'}}}
         physical = SimpleNamespace(f_bavail=30 * team.GIB, f_frsize=1)
         with patch.object(settings, 'read', return_value={'mount': '/mnt/data'}), patch.object(settings, 'verify_mount'), patch.object(settings, 'quota_usage', return_value={34110: {'used': 0, 'inodes': 10}}), patch.object(settings.os, 'statvfs', return_value=physical), patch.object(settings.Path, 'read_text', return_value='MemAvailable: 4194304 kB\n'), patch.object(settings, 'inspect', return_value=None):
-            with self.assertRaisesRegex(ValueError, '2 GiB host floor'):
+            with self.assertRaisesRegex(ValueError, '1 GiB host floor'):
                 settings.preview(state, policy())
 
     def test_reclaimable_worker_cache_is_not_counted_twice_as_available_ram(self):
@@ -103,10 +103,10 @@ class TeamTests(unittest.TestCase):
         def counters(args):
             return str(5 * team.GIB // 2) if args[-1].endswith('memory.current') else 'anon 536870912\nfile 2147483648\n'
         with patch.object(settings, 'read', return_value={'mount': '/mnt/data'}), patch.object(settings, 'verify_mount'), patch.object(settings, 'quota_usage', return_value={34110: {'used': 0, 'inodes': 10}}), patch.object(settings.os, 'statvfs', return_value=physical), patch.object(settings, 'inspect', return_value={'State': {'Running': True}}), patch.object(settings, 'command', side_effect=counters):
-            with patch.object(settings.Path, 'read_text', return_value='MemAvailable: 3145728 kB\n'):
-                with self.assertRaisesRegex(ValueError, '2 GiB host floor'):
+            with patch.object(settings.Path, 'read_text', return_value='MemAvailable: 2097152 kB\n'):
+                with self.assertRaisesRegex(ValueError, '1 GiB host floor'):
                     settings.preview(state, candidate)
-            with patch.object(settings.Path, 'read_text', return_value='MemAvailable: 4194304 kB\n'):
+            with patch.object(settings.Path, 'read_text', return_value='MemAvailable: 3145728 kB\n'):
                 self.assertEqual(settings.preview(state, candidate)['policy']['pool']['ram_bytes'], 2 * team.GIB)
 
     def test_active_work_blocks_every_settings_mutation(self):

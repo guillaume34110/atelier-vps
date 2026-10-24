@@ -36,7 +36,7 @@ simultaneous sub-sample process-tree peaks can still escape aggregate sampling.
 Per-job checks are sampled; the container's memory and ext4 quota are hard limits.
 Admission errors identify the missing resource and requested/available bytes.
 
-The reference service retains the 2 GiB host floor, 5 GiB global worker envelope
+The reference service retains the 1 GiB host floor, 5 GiB global worker envelope
 and 512 MiB physical volume margin. The live reservable amount can be much
 smaller than the worker ceiling. Do not increase reservations to force saturation.
 

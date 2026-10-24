@@ -43,6 +43,15 @@ class ResourceTests(unittest.TestCase):
                 pass
         self.assertEqual(r.view(self.root, self.capacity)['active_count'], 0)
 
+    def test_host_floor_is_one_gib_and_supervisors_stay_accounted(self):
+        self.capacity['host_available_ram'] = 3 * r.GIB
+        with patch.dict(r.os.environ, {}, clear=True):
+            pool = r.view(self.root, self.capacity)
+        self.assertEqual(pool['ram_accounting']['host_floor_bytes'], r.GIB)
+        self.assertEqual(pool['ram_available'], 2 * r.GIB - r.OVERHEAD)
+        with patch.dict(r.os.environ, {'USEVPS_HOST_RAM_RESERVE_GIB': '2'}):
+            self.assertEqual(r.view(self.root, self.capacity)['ram_available'], r.GIB - r.OVERHEAD)
+
     def test_shared_cache_growth_is_charged_once_and_workspace_is_independent(self):
         r.write_json(self.root / '.cache-accounting.json', 0)
         with self.claim('a') as first, self.claim('b') as second:
@@ -92,7 +101,7 @@ class ResourceTests(unittest.TestCase):
         self.assertEqual(r.ram_request(self.root, request)[0], 256 * r.MIB)
         explicit = {**request, 'ram_bytes': r.GIB}
         self.assertEqual(r.ram_request(self.root, explicit), (r.GIB, 'explicit'))
-        self.capacity['host_available_ram'] = 2 * r.GIB + 320 * r.MIB
+        self.capacity['host_available_ram'] = r.GIB + 320 * r.MIB
         with self.assertRaises(r.AdmissionError) as error, self.claim('a', **request):
             pass
         self.assertEqual(error.exception.admission['reasons'], ['ram'])
