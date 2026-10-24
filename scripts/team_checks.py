@@ -11,7 +11,7 @@ import uuid
 import vps
 
 
-def verify_team_isolation(root, dev, remote_host, volume, command, execute, payload):
+def verify_team_isolation(root, dev, remote_host, volume, command, execute, payload, image):
     token = uuid.uuid4().hex[:10]
     base = (volume if remote_host else root) / ('.usevps-team-qa-' + token)
     names = ['avps-qa-' + label + '-' + token for label in ['alice', 'bob']]
@@ -48,7 +48,7 @@ probe=m/'probe';probe.mkdir();probe.chmod(0)
                      '--volume', str(base / 'volume/probe') + ':/volume-stat:ro',
                      '--env', 'USEVPS_VOLUME_ID=ci-team', '--env', 'USEVPS_VOLUME_STATS=/volume-stat',
                      '--env', 'USEVPS_MODE=allocated', '--env', 'USEVPS_TENANT=' + label,
-                     '--env', 'USEVPS_MAX_JOBS=1', '--env', 'USEVPS_CPU_LIMIT=0.5', 'usevps:checks'])
+                     '--env', 'USEVPS_MAX_JOBS=1', '--env', 'USEVPS_CPU_LIMIT=0.5', image])
             for _ in range(40):
                 ready = subprocess.run(['docker', 'exec', name, 'python3', '-c', "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health')"], capture_output=True)
                 if ready.returncode == 0:

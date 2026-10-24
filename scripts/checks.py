@@ -89,6 +89,7 @@ def main():
         mounts.extend(["--volume", str(dev / src) + ":" + dst + ":ro"])
     command(["docker", "compose", "-f", "docker-compose.yaml", "config", "--quiet"], cwd=REPO)
     command(["docker", "build", "-t", "usevps:checks", "."], cwd=REPO)
+    image = json.loads(command(['docker', 'image', 'inspect', 'usevps:checks']))[0]['Id']
     print("Container build: passed", flush=True)
     workspace = Path(tempfile.mkdtemp(prefix="container-", dir=root)) if local else volume / ('.usevps-qa-' + uuid.uuid4().hex)
     capacity = Path(tempfile.mkdtemp(prefix="capacity-", dir=root)) if local else volume / '.usevps-stat'
@@ -111,7 +112,7 @@ def main():
                                     "--memory-swap=2g", "--pids-limit=256", "--cpus=2", *mounts,
                                     "--publish", "127.0.0.1::8080", "--volume", str(workspace) + ":/workspace",
                                     "--volume", str(capacity) + ":/volume-stat:ro", "--env", "USEVPS_VOLUME_STATS=/volume-stat",
-                                    "--env", "USEVPS_VOLUME_ID=ci-volume", "usevps:checks"],
+                                    "--env", "USEVPS_VOLUME_ID=ci-volume", image],
                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         for _ in range(60):
             r = subprocess.run(["docker", "inspect", name], capture_output=True)
@@ -133,13 +134,36 @@ def main():
             time.sleep(0.3)
         else:
             raise RuntimeError("real health service unavailable")
+        # The running service keeps this exact image referenced during the probe.
+        cpu_env = {**os.environ, 'USEVPS_CPU_QUOTA': '50000', 'USEVPS_CPU_LIMIT': '0.5'}
+        spec = json.loads(command(['docker', 'compose', '-f', 'docker-compose.yaml', 'config', '--format', 'json'],
+                                  cwd=REPO, env=cpu_env))['services']['worker']
+        assert spec['cpu_period'] == 100000 and spec['cpu_quota'] == 50000
+        cpu_name = 'usevps-cpu-spec-' + uuid.uuid4().hex[:10]
+        spec.pop('build', None)
+        spec.pop('networks', None)
+        spec.update(image=image, container_name=cpu_name, network_mode='none')
+        try:
+            command(['docker', 'compose', '-p', cpu_name, '-f', '-', 'create'],
+                    input=json.dumps({'services': {'worker': spec}}).encode(), cwd=REPO)
+            info = json.loads(command(['docker', 'inspect', cpu_name]))[0]
+            assert not info['State']['Running'] and info['State']['Pid'] == 0
+            assert info['HostConfig']['CpuQuota'] == 50000 and info['HostConfig']['CpuPeriod'] == 100000
+        finally:
+            inspected = subprocess.run(['docker', 'inspect', cpu_name], capture_output=True)
+            if inspected.returncode == 0:
+                own = json.loads(inspected.stdout)[0]
+                assert own['Config']['Labels']['com.docker.compose.project'] == cpu_name
+                assert not own['State']['Running']
+                command(['docker', 'rm', cpu_name])
+        print('Compose CPU quota: passed', flush=True)
         command(["docker", "exec", name, "python3", "-c", "import pip, venv; import socket; assert socket.getaddrinfo('registry.npmjs.org',443)"])
         command(["docker", "exec", name, "node", "--version"])
         (evidence / "toolchain.json").write_bytes(command(["docker", "exec", name, "cat", "/opt/usevps-dev.json"]))
         bad = subprocess.run(["docker", "run", "--rm", "--network=none", "--read-only",
                               "--cap-drop=ALL", "--security-opt=no-new-privileges:true", "--memory=64m",
                               "--memory-swap=64m", "--pids-limit=32", "--volume", str(workspace) + ":/workspace",
-                              "--env", "USEVPS_VOLUME_ID=ci-volume", *mounts, "usevps:checks"], capture_output=True, timeout=60)
+                              "--env", "USEVPS_VOLUME_ID=ci-volume", *mounts, image], capture_output=True, timeout=60)
         assert bad.returncode != 0 and b"capacity probe is missing" in bad.stdout + bad.stderr, bad.stderr[-1000:]
         capacity_status = json.loads(execute(name, "status"))
         assert capacity_status["admit"] and capacity_status["workspace_free_bytes"] > 0, capacity_status
@@ -265,7 +289,7 @@ def main():
         assert checked_guard["status"] == "passed", checked_guard
         execute(name, "release", json.dumps({"id": checked_guard["id"]}).encode() + b"\n")
         from team_checks import verify_team_isolation
-        verify_team_isolation(root, dev, remote_host if remote else None, volume, command, execute, payload)
+        verify_team_isolation(root, dev, remote_host if remote else None, volume, command, execute, payload, image)
         print('Separate developers: private files, hard quota, CPU cap and neighboring OOM survival passed', flush=True)
         shutil.rmtree(dest)
         archive.unlink()

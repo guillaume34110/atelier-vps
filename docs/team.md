@@ -94,6 +94,11 @@ slot for supervisors. CPU reservations use integer scheduling slots within the
 worker; fractional container CPU quotas still cap total CPU time.
 The developers share a total CPU scheduling weight of at most 128, preserving
 the service's low priority relative to existing projects.
+CPU ceilings use `cpu_quota` with a 100,000-microsecond period, supported by
+Coolify 3's Compose 2.6 client. Allocations round down to that precision and
+require at least 0.01 vCPU. A plain service-level `cpus` field is ignored by
+that older client; the administrator adapter writes both scheduling and kernel
+quota settings.
 
 Workers cannot change inode flags or project IDs: an additional inherited
 seccomp filter protects quota attributes while preserving Docker's existing
