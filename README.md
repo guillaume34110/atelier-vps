@@ -8,7 +8,7 @@
 </p>
 
 <p align="center"><strong>A shared Linux workbench for your local coding agents.</strong><br>
-Reserve a slice of CPU, RAM and disk. Borrow idle cores. Bring verified results home.</p>
+Reserve a slice of CPU, RAM and disk. Learn memory peaks. Bring verified results home.</p>
 
 <p align="center"><a href="docs/README.fr.md">Français</a> · <a href="docs/deployment.md">Server setup</a> · <a href="docs/integration.md">Agent integration</a> · <a href="docs/architecture.md">Resource sharing</a> · <a href="docs/widget.md">Mac widget</a></p>
 
@@ -41,12 +41,17 @@ Restart the agent host to discover the tools. Keep `~/.local/bin` on PATH.
 
 ```sh
 atelier-vps run --source ./my-project --agent "Tests · API" \
-  --cpus 1 --ram-gib 1 --disk-gib 2 --timeout 900 -- npm test
+  --cpus 1 --ram-gib auto --disk-gib 2 --timeout 900 -- npm test
 ```
 
 Sources are filtered and streamed without a second local archive. Local
 dependencies, Git history, common secret files and generated outputs are
 excluded. Recreate dependencies from lockfiles for Linux ARM64.
+
+RAM `auto` learns this workload's observed peak and adds headroom; new workloads
+start conservatively. Explicit GiB remain available. Admission never silently
+reduces a reservation to fit. See [measured RAM and private developer pools](docs/team.md)
+for both modes, separate quotas and the authenticated administrator MCP tools.
 
 Fetch into explicitly bounded temporary storage, then preserve useful files
 before releasing the completed remote job:
@@ -68,7 +73,7 @@ The legacy `usevps` launcher can keep pointing to the same client.
 | Resource | Behavior |
 | --- | --- |
 | CPU | Reserve whole cores; idle cores are lent and reassigned as jobs join or leave. |
-| RAM | Reserve a peak; admission accounts for reservations and real host memory. |
+| RAM | Learn a measured peak plus headroom, or reserve explicit GiB; admission protects real host capacity. |
 | Disk | Reserve the complete peak: sources, dependencies, caches, logs and results. |
 | Jobs | Up to four, subject to actual CPU, RAM and disk capacity. |
 | Neighbors | Low CPU priority, a host RAM floor and container limits protect other projects. |

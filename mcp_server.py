@@ -39,18 +39,22 @@ def vps_status() -> dict[str, Any]:
 
 @server.tool(structured_output=True)
 def vps_run(source: str, argv: list[str], agent: str, disk_gib: float,
-            ram_gib: float = 1, cpus: int = 1, timeout: int = 900) -> dict[str, Any]:
+            ram_gib: float | None = None, cpus: int = 1, timeout: int = 900) -> dict[str, Any]:
     """Run a Linux ARM64 task, streaming filtered sources without a local archive.
 
     Reserve the full peak, including dependencies, caches, downloads and outputs.
     At most 4 jobs share the pool; unused cores are lent. This call waits for the
     result (maximum 3600s); configure this MCP server's tool timeout to 3700s.
     Results stay on the VPS until fetched, verified and explicitly released.
+    Omit ram_gib to learn this workload's measured peaks with 25% + 64 MiB
+    headroom (first run: up to 1 GiB). Explicit RAM overrides are respected.
+    RAM is never silently reduced to fit a busy pool. New/heavier work should
+    reserve its known full peak; dependency-lock changes start a new profile.
     """
     directory = Path(source).expanduser().resolve()
     if not directory.is_dir() or not argv or not all(isinstance(x, str) and '\x00' not in x for x in argv):
         raise ValueError('an existing source directory and a nonempty argument array are required')
-    if not all(math.isfinite(x) and x > 0 for x in (disk_gib, ram_gib)):
+    if not all(math.isfinite(x) and x > 0 for x in (disk_gib, ram_gib) if x is not None):
         raise ValueError('finite, positive disk and RAM reservations are required')
     list(vps.inputs(directory))
     state = vps_status()
@@ -59,7 +63,8 @@ def vps_run(source: str, argv: list[str], agent: str, disk_gib: float,
     return response('run', {'argv': argv, 'agent': public_label(agent, 'Agent'),
                            'project': public_label(directory.name, 'Project'), 'timeout': timeout,
                            'disk_bytes': math.ceil(disk_gib * vps.GIB),
-                           'ram_bytes': math.ceil(ram_gib * vps.GIB), 'cpus': cpus}, directory)
+                           'ram_bytes': vps.ram_bytes(ram_gib, state), 'cpus': cpus,
+                           'dependency_digest': vps.dependency_digest(directory)}, directory)
 
 
 @server.tool(structured_output=True)
@@ -104,6 +109,47 @@ def vps_release(job_id: str, results_preserved: bool) -> dict[str, Any]:
     if not results_preserved:
         raise ValueError('fetch, verify and preserve useful results before release')
     return response('release', {'id': job_id})
+
+
+def settings_response(action, **request):
+    rc, raw = vps.transport(client_config.admin_host(), 'settings', {'action': action, **request})
+    if not raw or len(raw) > 65536:
+        raise RuntimeError('invalid administrator response')
+    value = json.loads(raw)
+    if rc:
+        value['ok'] = False
+    return value
+
+
+@server.tool(structured_output=True)
+def admin_settings_get() -> dict[str, Any]:
+    """Administrator only: inspect modes, per-developer quotas and settings revision.
+
+    Requires a separately authenticated, restricted administrator SSH alias.
+    Ordinary development access cannot call the root settings helper.
+    """
+    return settings_response('get')
+
+
+@server.tool(structured_output=True)
+def admin_settings_preview(policy: dict[str, Any]) -> dict[str, Any]:
+    """Administrator only: preview developer percentages as CPU/RAM/disk limits.
+
+    No mutation. Refuses overcommit, quotas below preserved data and unavailable
+    host RAM. Developer IDs bind to separate SSH users and private workspaces.
+    """
+    return settings_response('preview', policy=policy)
+
+
+@server.tool(structured_output=True)
+def admin_settings_apply(policy: dict[str, Any], expected_revision: str) -> dict[str, Any]:
+    """Administrator only: apply a previewed policy on its current revision.
+
+    Drain affected work first; active jobs block updates. Only changed workers
+    are deployed. Data is never purged. Interrupted updates remain pending and
+    must be resumed with the same candidate; unaffected developers continue.
+    """
+    return settings_response('apply', policy=policy, expected_revision=expected_revision)
 
 
 if __name__ == '__main__':

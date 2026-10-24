@@ -25,3 +25,10 @@ def valid_alias(value):
 
 def host():
     return valid_alias(os.environ.get('ATELIER_VPS_HOST', load().get('ssh_host', 'dev-vps')))
+
+
+def admin_host():
+    alias = os.environ.get('ATELIER_VPS_ADMIN_HOST', load().get('admin_ssh_host'))
+    if not alias:
+        raise PermissionError('administrator SSH alias is not configured on this machine')
+    return valid_alias(alias)

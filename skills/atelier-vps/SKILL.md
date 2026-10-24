@@ -10,7 +10,13 @@ RAM and disk for the complete peak. Busy can be true while admission is true:
 several agents can share the pool.
 
 Call `vps_run` with the actual source directory, an argument array, a short public
-agent label and explicit CPU, RAM, disk and timeout reservations. The service
+agent label and explicit CPU, disk and timeout reservations. Omit `ram_gib` in MCP
+or use CLI `--ram-gib auto` for previously profiled work: the worker reserves its
+largest measured peak plus 25% and 64 MiB. New profiles start at up to 1 GiB;
+reserve explicit RAM for new/heavier work with a known peak. Never shrink a claim
+just to fit free RAM, or automatically retry an arbitrary command after failure.
+Inspect `ram_peak_bytes` and the actual admission diagnostics, not final RSS or
+the 5 GiB ceiling as if it were free capacity. The service
 supports at most four simultaneous jobs; reserve only what the task needs. Idle
 CPU cores are lent automatically. Never bypass refused admission with another
 worker, root SSH, Docker or a virtual machine.
@@ -35,3 +41,10 @@ and all local disk/memory guards.
 The MCP connection is local stdio over an existing restricted SSH alias. A cloned
 repository alone does not grant a cloud chat access to the local computer. See
 the repository's integration guide for supported host setup.
+
+In allocated team mode, only the authenticated developer's worker and quotas are
+available. Shared tools are read-only; writable caches and projects stay private.
+Keep ordinary work on the four development tools. `admin_settings_*` requires
+separate administrator authentication and is only for explicitly requested policy
+changes; active work and pending transactions must not be bypassed. See the
+repository's `docs/team.md` for the administrator workflow.

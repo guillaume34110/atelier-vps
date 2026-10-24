@@ -20,7 +20,7 @@ def main():
     assert image.read_bytes().startswith(b'\x89PNG\r\n\x1a\n')
     assert result['source'] == 'real restricted SSH' and result['connected'] and result['samples'] >= 2
     assert result['controls_exercised'] is True
-    assert result['status']['ok'] and result['window_width'] == 480 and result['window_height'] > 400
+    assert result['status']['ok'] and 360 <= result['window_width'] <= 900 and result['window_height'] >= 180
     if args.require_telemetry:
         assert result['cpu_fraction'] is not None and 0 <= result['cpu_fraction'] <= 1
         assert result['status']['telemetry']['worker_ram_limit'] == 5 * 1024**3

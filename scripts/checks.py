@@ -162,6 +162,20 @@ def main():
         assert (dest / "work/result.txt").read_text() == "42"
         print("Running service + input/process/result SHA256 round trip: passed", flush=True)
         execute(name, "release", json.dumps({"id": task["id"]}).encode() + b"\n")
+        peak_command = ['python3', '-c', 'data=bytearray(128*1024**2); print(len(data))']
+        first_peak = json.loads(execute(name, 'run', payload(peak_command, ram_bytes=None)))
+        assert first_peak['status'] == 'passed', first_peak
+        measured = first_peak['resources']['ram_peak_bytes']
+        assert measured >= 128 * 1024**2, first_peak
+        assert measured > first_peak['resources']['ram_bytes'], first_peak
+        second_peak = json.loads(execute(name, 'run', payload(peak_command, ram_bytes=None)))
+        assert second_peak['status'] == 'passed', second_peak
+        assert measured < second_peak['reservation']['ram_bytes'] < first_peak['reservation']['ram_bytes'], second_peak
+        assert second_peak['reservation']['ram_source'] == 'measured', second_peak
+        (evidence / 'ram-profile-proof.json').write_text(json.dumps({'first': first_peak, 'second': second_peak}))
+        for job in [first_peak, second_peak]:
+            execute(name, 'release', json.dumps({'id': job['id']}).encode() + b'\n')
+        print('Short-lived child RAM peak and measured auto reservation: passed', flush=True)
         orphan = json.loads(execute(name, "run", payload(["python3", "-c", "import subprocess; from pathlib import Path; p=subprocess.Popen(['python3','-c','import time; time.sleep(60)'], start_new_session=True); Path('orphan.pid').write_text(str(p.pid))"])))
         assert orphan["status"] == "passed", orphan
         command(["docker", "exec", name, "python3", "-c", "from pathlib import Path; p=int(Path('/workspace/jobs/" + orphan["id"] + "/work/orphan.pid').read_text()); s=Path('/proc')/str(p)/'stat'; assert not s.exists() or s.read_text().rsplit(') ',1)[1].startswith('Z ')"])
@@ -250,6 +264,9 @@ def main():
         checked_guard = json.loads(execute(name, "run", payload(["rtk", "proxy", "python3", "/app/storage-guard.py", "--volume", ".", "--require-gib", "0.001"])))
         assert checked_guard["status"] == "passed", checked_guard
         execute(name, "release", json.dumps({"id": checked_guard["id"]}).encode() + b"\n")
+        from team_checks import verify_team_isolation
+        verify_team_isolation(root, dev, remote_host if remote else None, volume, command, execute, payload)
+        print('Separate developers: private files, hard quota, CPU cap and neighboring OOM survival passed', flush=True)
         shutil.rmtree(dest)
         archive.unlink()
     finally:

@@ -11,7 +11,8 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(mcp_server.vps, 'transport', return_value=(0, b'{"ok":true,"admit":true}')) as transport:
             async with Client(mcp_server.server) as client:
                 tools = await client.list_tools()
-                self.assertEqual({t.name for t in tools.tools}, {'vps_status', 'vps_run', 'vps_fetch', 'vps_release'})
+                self.assertEqual({t.name for t in tools.tools}, {'vps_status', 'vps_run', 'vps_fetch', 'vps_release',
+                    'admin_settings_get', 'admin_settings_preview', 'admin_settings_apply'})
                 result = await client.call_tool('vps_status')
                 self.assertFalse(result.is_error)
                 self.assertTrue(result.structured_content['ok'])
@@ -26,3 +27,10 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
                                                           'agent': 'Tests', 'disk_gib': 1})
                 self.assertTrue(result.is_error)
                 transport.assert_not_called()
+
+    async def test_admin_tools_require_separate_authenticated_alias(self):
+        with patch.object(mcp_server.client_config, 'admin_host', side_effect=PermissionError('administrator required')), patch.object(mcp_server.vps, 'transport') as transport:
+            async with Client(mcp_server.server) as client:
+                result = await client.call_tool('admin_settings_get')
+                self.assertTrue(result.is_error)
+            transport.assert_not_called()

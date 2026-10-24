@@ -7,8 +7,11 @@ lecture seule dans l'image, à `/app/AGENTS.md`.
   avant une tâche ; conserver les réservations atomiques, au plus quatre tâches et
   l'attente bornée. Aucun shell hôte, socket Docker ou autre worker de débordement.
 - Privilégier ce pool pour les travaux compatibles Linux ARM64 ; utiliser les
-  outils MCP `atelier-vps` quand ils sont disponibles. Déclarer CPU, RAM et pic
-  disque par tâche. `busy` peut être vrai en même temps que `admit` : il reste
+  outils MCP `atelier-vps` quand ils sont disponibles. Déclarer CPU et pic disque.
+  Utiliser `--ram-gib auto`, ou omettre `ram_gib` dans MCP, pour réutiliser les pics
+  mesurés avec marge. Déclarer un pic RAM explicite connu pour un travail nouveau
+  ou plus lourd ; ne pas réduire une réservation pour contourner un refus.
+  `busy` peut être vrai en même temps que `admit` : il reste
   alors une part disponible. Respecter les réservations et les refus réels.
 - Préserver les projets existants. Conserver le volume ajouté distinct du disque
   système : tout le volume ajouté est dédié au service ; quota dur calculé sur
@@ -23,7 +26,8 @@ lecture seule dans l'image, à `/app/AGENTS.md`.
 - Réutiliser les logiciels Ubuntu 24.04 de `.usevps-dev` montés en lecture seule,
   conformément à `ops/toolchain-lock.json`. Node 22/pnpm, Python 3.12/uv, Java 17/
   Gradle, ADB, Chromium/Playwright et les utilitaires partagés sont disponibles.
-  Garder les dépendances des projets séparées, avec les caches partagés. Ne pas
+  Garder les dépendances des projets séparées, avec les caches partagés seulement
+  entre travaux d'un même développeur. Ne pas
   installer un second SDK ou navigateur sans besoin concret et budget explicite.
 - Pour le navigateur, utiliser `CHROMIUM_PATH`, un profil temporaire et les
   arguments des exemples fournis. Les binaires macOS et les outils Android Linux
@@ -53,6 +57,16 @@ lecture seule dans l'image, à `/app/AGENTS.md`.
   Le widget natif utilise seulement `status`, un délai court et la connexion SSH
   existante. Vérifier le build macOS et son rendu réel, avec les budgets locaux,
   en plus de toute la suite Linux avant une poussée.
+- Le mode équipe utilise des workers, accès SSH, espaces et quotas ext4 distincts.
+  L'identité est fixée par la passerelle ; une étiquette d'agent n'autorise jamais
+  l'accès d'un autre développeur. Les outils `admin_settings_*` nécessitent une
+  identité administrateur séparée et ne servent pas aux calculs courants. Préserver
+  les plafonds cumulés, les réseaux privés et les transactions de réglages en
+  attente ; reprendre leur candidat exact sans effacer le marqueur de sécurité.
+- Préserver le filtre seccomp supplémentaire du worker : il interdit de modifier
+  les identifiants de quota et les attributs des inodes, sans remplacer le filtre
+  Docker. Les tâches 32 bits ne sont pas prises en charge. Ne pas contourner ce
+  garde avec un autre point d'entrée ou un accès Docker administrateur.
 - Ne jamais lire ni transférer de fichier `CLAUDE.md`. Ne jamais versionner ou
   afficher une clé privée, un jeton, un fichier d'environnement ou autre secret.
 - Exécuter toute la suite CI dans `scripts/checks.py`, incluant les vrais services
