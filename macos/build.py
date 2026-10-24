@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import shutil
 import subprocess
 import sys
 
@@ -27,12 +28,16 @@ def main():
     binary.parent.mkdir(parents=True)
     (bundle / 'Contents/Resources').mkdir()
     sources = [source / name for name in ['WidgetModel.swift', 'WidgetApp.swift']]
-    digest = hashlib.sha256(b''.join(p.name.encode() + b'\0' + p.read_bytes() for p in sources + [Path(__file__)])).hexdigest()
+    translations = sorted(source.glob('*.lproj/*.strings'))
+    for locale in ['en', 'fr']:
+        shutil.copytree(source / (locale + '.lproj'), bundle / 'Contents/Resources' / (locale + '.lproj'))
+    digest = hashlib.sha256(b''.join(p.relative_to(source).as_posix().encode() + b'\0' + p.read_bytes() for p in sources + [Path(__file__).resolve()] + translations)).hexdigest()
     info = {'CFBundleIdentifier': 'eu.progsoft.usevps.widget', 'CFBundleName': 'usevps',
             'CFBundleDisplayName': 'usevps', 'CFBundleExecutable': 'usevps',
             'CFBundlePackageType': 'APPL', 'CFBundleVersion': '1',
             'CFBundleShortVersionString': '1.0', 'LSUIElement': True,
             'LSMinimumSystemVersion': '14.0', 'NSHighResolutionCapable': True,
+            'CFBundleDevelopmentRegion': 'en', 'CFBundleLocalizations': ['en', 'fr'],
             'UseVPSSourceDigest': digest}
     (bundle / 'Contents/Info.plist').write_bytes(plistlib.dumps(info))
     subprocess.run(['xcrun', 'swiftc', '-swift-version', '5', '-O', '-whole-module-optimization',

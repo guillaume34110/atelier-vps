@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import io
 import json
+import math
 import os
 from pathlib import Path
 import shutil
@@ -44,6 +45,28 @@ def temp_root():
     return Path(value)
 
 
+def dependency_digest(project):
+    digest = hashlib.sha256()
+    for name in ['package-lock.json', 'pnpm-lock.yaml', 'yarn.lock', 'uv.lock', 'requirements.txt',
+                 'pyproject.toml', 'build.gradle', 'build.gradle.kts', 'gradle.lockfile']:
+        path = project / name
+        if path.is_file() and not path.is_symlink():
+            digest.update(name.encode())
+            with path.open('rb') as source:
+                while chunk := source.read(65536):
+                    digest.update(chunk)
+    return digest.hexdigest()
+
+
+def ram_bytes(value, state):
+    if value is None or value == 'auto':
+        return None if state.get('capabilities', {}).get('ram_profiles') else GIB
+    number = float(value)
+    if not math.isfinite(number) or number <= 0:
+        raise ValueError('RAM must be auto or finite positive GiB')
+    return math.ceil(number * GIB)
+
+
 def transport(host, operation, request=None, payload=None, output=None, source=None):
     client_config.valid_alias(host)
     command = ["ssh", "-T", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15",
@@ -52,19 +75,28 @@ def transport(host, operation, request=None, payload=None, output=None, source=N
         command = ['rtk', 'proxy', *command]
     with subprocess.Popen(command, stdin=subprocess.PIPE, stdout=output or subprocess.PIPE,
                           stderr=subprocess.PIPE) as proc:
-        if request is not None:
-            proc.stdin.write(json.dumps(request).encode() + b"\n")
-        if payload:
-            with payload.open("rb") as src:
-                shutil.copyfileobj(src, proc.stdin, 65536)
-        if source is not None:
-            with tarfile.open(fileobj=proc.stdin, mode='w|') as archive:
-                for file, name in inputs(source):
-                    archive.add(file, arcname=name, recursive=False)
-        proc.stdin.close()
+        try:
+            if request is not None:
+                proc.stdin.write(json.dumps(request).encode() + b"\n")
+            if payload:
+                with payload.open("rb") as src:
+                    shutil.copyfileobj(src, proc.stdin, 65536)
+            if source is not None:
+                with tarfile.open(fileobj=proc.stdin, mode='w|') as archive:
+                    for file, name in inputs(source):
+                        archive.add(file, arcname=name, recursive=False)
+            proc.stdin.close()
+        except BrokenPipeError:
+            pass  # Read the admission error even when the source stream was refused.
         proc.stdin = None
         result, errors = proc.communicate(timeout=3700)
         if proc.returncode and not result:
+            try:
+                failure = json.loads(errors)
+                if isinstance(failure, dict) and failure.get('ok') is False:
+                    return proc.returncode, errors
+            except (ValueError, UnicodeError):
+                pass
             raise RuntimeError(errors.decode(errors="replace")[-2000:])
         return proc.returncode, result
 
@@ -113,13 +145,17 @@ def main():
     parser.add_argument("--host", default=client_config.host())
     commands = parser.add_subparsers(dest="action", required=True)
     commands.add_parser("status")
+    settings = commands.add_parser('settings', help='restricted administrator settings; separate SSH identity required')
+    settings.add_argument('operation', choices=['get', 'preview', 'apply'])
+    settings.add_argument('--policy', type=Path)
+    settings.add_argument('--expected-revision')
     run = commands.add_parser("run")
     run.add_argument("--source", type=Path, required=True)
     run.add_argument("--timeout", type=int, default=1800)
     run.add_argument("--disk-gib", type=float, default=1)
     run.add_argument("--agent", default=os.environ.get("USEVPS_AGENT"), help="Public agent/task label shown in the Mac widget")
     run.add_argument("--cpus", type=int, default=1, help="reserved cores; unused cores are lent to active jobs")
-    run.add_argument("--ram-gib", type=float, default=1, help="reserved RAM, monitored per task")
+    run.add_argument("--ram-gib", default='auto', help="auto learns measured peaks with headroom; or explicit GiB")
     run.add_argument("argv", nargs=argparse.REMAINDER)
     fetch = commands.add_parser("fetch")
     fetch.add_argument("id")
@@ -128,6 +164,19 @@ def main():
     release.add_argument("id")
     release.add_argument("--confirmed", action="store_true", required=True)
     args = parser.parse_args()
+    if args.action == 'settings':
+        request = {'action': args.operation}
+        if args.operation != 'get':
+            if not args.policy or args.policy.stat().st_size > 65536 or args.policy.name == 'CLAUDE.md':
+                raise ValueError('a bounded JSON policy file is required')
+            request['policy'] = json.loads(args.policy.read_text())
+        if args.operation == 'apply':
+            if not args.expected_revision:
+                raise ValueError('preview and pass --expected-revision before applying')
+            request['expected_revision'] = args.expected_revision
+        rc, data = transport(client_config.admin_host(), 'settings', request)
+        print(data.decode().strip())
+        return rc
     if args.action == "status":
         rc, data = transport(args.host, "status")
         print(data.decode().strip())
@@ -142,10 +191,12 @@ def main():
             raise ValueError('source directory and command are required')
         # Validate the complete manifest before SSH; stream it without a local copy.
         list(inputs(args.source.resolve()))
+        state = json.loads(transport(args.host, 'status')[1]) if args.ram_gib == 'auto' else {}
         rc, data = transport(args.host, 'run', {'argv': argv, 'timeout': args.timeout,
                              'agent': public_label(args.agent, 'Agent non identifié'),
                              'project': public_label(args.source.resolve().name, 'Projet non identifié'),
-                             'cpus': args.cpus, 'ram_bytes': int(args.ram_gib * GIB),
+                             'cpus': args.cpus, 'ram_bytes': ram_bytes(args.ram_gib, state),
+                             'dependency_digest': dependency_digest(args.source.resolve()),
                              'disk_bytes': int(args.disk_gib * GIB)}, source=args.source.resolve())
         print(data.decode().strip())
         return rc

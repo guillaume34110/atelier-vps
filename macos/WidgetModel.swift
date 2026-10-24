@@ -26,6 +26,7 @@ struct ResourcePool: Decodable {
     let active: [Activity]
     let active_count: Int
     let max_jobs: Int
+    var ram_available: Double? = nil
 }
 
 struct Telemetry: Decodable {
@@ -42,6 +43,12 @@ struct Telemetry: Decodable {
     let system_disk_free: Double?
     let activity: [Activity]
     let active: Activity?
+    var worker_cpu_limit: Double? = nil
+}
+
+struct UserScope: Decodable {
+    let id: String
+    let mode: String
 }
 
 struct VPSSnapshot: Decodable {
@@ -56,6 +63,7 @@ struct VPSSnapshot: Decodable {
     let host_available_ram: Double
     let telemetry: Telemetry?
     let pool: ResourcePool?
+    var scope: UserScope? = nil
 
     static func decode(_ data: Data) throws -> VPSSnapshot {
         guard data.count <= 65536 else { throw MonitorError.invalidData }
@@ -67,7 +75,7 @@ struct VPSSnapshot: Decodable {
               (value.telemetry?.activity.count ?? 0) <= 8 else { throw MonitorError.invalidData }
         if let t = value.telemetry {
             let metrics = [t.cpu_total, t.cpu_idle, t.host_total_ram, t.worker_ram,
-                           t.worker_ram_limit, t.worker_cpu_usec, t.system_disk_total, t.system_disk_free]
+                           t.worker_ram_limit, t.worker_cpu_usec, t.system_disk_total, t.system_disk_free, t.worker_cpu_limit]
             guard t.sample_time.isFinite && t.sample_time >= 0,
                   metrics.compactMap({ $0 }).allSatisfy({ $0.isFinite && $0 >= 0 }),
                   t.cpu_count.map({ 1...4096 ~= $0 }) ?? true else { throw MonitorError.invalidData }
@@ -87,13 +95,18 @@ struct VPSSnapshot: Decodable {
                   pool.active.allSatisfy({ ($0.cpus ?? 0) > 0 && ($0.cpus ?? 0) <= pool.cpu_total
                       && ($0.ram_bytes ?? -1).isFinite && ($0.ram_bytes ?? -1) >= 0
                       && ($0.disk_bytes ?? -1).isFinite && ($0.disk_bytes ?? -1) >= 0 }) else { throw MonitorError.invalidData }
+            guard pool.ram_available.map({ $0.isFinite && $0 >= 0 }) ?? true else { throw MonitorError.invalidData }
+        }
+        if let scope = value.scope {
+            guard scope.id.range(of: "^[a-z][a-z0-9-]{0,31}$", options: .regularExpression) != nil,
+                  ["opportunistic", "allocated"].contains(scope.mode) else { throw MonitorError.invalidData }
         }
         return value
     }
 
     var ramFraction: Double? {
-        guard let total = telemetry?.host_total_ram, total > 0 else { return nil }
-        return max(0, min(1, (total - host_available_ram) / total))
+        guard let total = telemetry?.worker_ram_limit, let used = telemetry?.worker_ram, total > 0 else { return nil }
+        return max(0, min(1, used / total))
     }
 
     var quotaFraction: Double { max(0, min(1, used_bytes / budget_bytes)) }
@@ -118,15 +131,32 @@ struct CPUReading {
             host = max(0, min(1, 1 - (idle - beforeIdle) / (total - before)))
         } else { host = nil }
         if let used = new.worker_cpu_usec, let before = old.worker_cpu_usec,
-           let count = new.cpu_count, count > 0, used >= before {
-            worker = max(0, min(1, (used - before) / 1_000_000 / (new.sample_time - old.sample_time) / Double(count)))
+           let count = new.worker_cpu_limit ?? new.cpu_count.map(Double.init), count > 0, used >= before {
+            worker = max(0, min(1, (used - before) / 1_000_000 / (new.sample_time - old.sample_time) / count))
         } else { worker = nil }
     }
 }
 
 func gib(_ bytes: Double?) -> String {
     guard let bytes = bytes, bytes.isFinite, bytes >= 0 else { return "—" }
-    return String(format: "%.1f", bytes / 1_073_741_824).replacingOccurrences(of: ".", with: ",")
+    return String(format: "%.1f", locale: Locale(identifier: UILanguage.code), bytes / 1_073_741_824)
+}
+
+enum UILanguage {
+    static var code: String {
+        let choice = UserDefaults.standard.string(forKey: "atelier-language") ?? "system"
+        return choice == "fr" || choice == "en" ? choice : (Locale.preferredLanguages.first?.hasPrefix("fr") == true ? "fr" : "en")
+    }
+}
+
+func L(_ key: String, language: String? = nil) -> String {
+    let code = language ?? UILanguage.code
+    guard let path = Bundle.main.path(forResource: code, ofType: "lproj"), let bundle = Bundle(path: path) else { return key }
+    return bundle.localizedString(forKey: key, value: key, table: "Localizable")
+}
+
+func LF(_ key: String, _ values: CVarArg...) -> String {
+    String(format: L(key), locale: Locale(identifier: UILanguage.code), arguments: values)
 }
 
 func percent(_ fraction: Double?) -> String {
@@ -144,7 +174,7 @@ func runModelChecks() throws {
     "worker_ram_limit":5368709120,"worker_cpu_usec":1000000,"activity":[],"active":null}}
     """
     let first = try VPSSnapshot.decode(Data(base.utf8))
-    precondition(first.ramFraction == 0.5)
+    precondition(first.ramFraction == 0.2)
     precondition(CPUReading(previous: nil, current: first.telemetry).host == nil)
     let second = try VPSSnapshot.decode(Data(base.replacingOccurrences(of: "\"sample_time\":10", with: "\"sample_time\":12")
         .replacingOccurrences(of: "\"cpu_total\":1000", with: "\"cpu_total\":1200")
@@ -170,7 +200,20 @@ func runModelChecks() throws {
     catch MonitorError.invalidData { }
     do { _ = try VPSSnapshot.decode(Data(repeating: 32, count: 65537)); preconditionFailure("accepted oversized JSON") }
     catch MonitorError.invalidData { }
-    precondition(gib(1073741824) == "1,0")
+    precondition(gib(1073741824) == (UILanguage.code == "fr" ? "1,0" : "1.0"))
+    precondition(L("Resources", language: "fr") == "Ressources")
+    precondition(L("Resources", language: "en") == "Resources")
+    var tenant = try JSONSerialization.jsonObject(with: Data(base.utf8)) as! [String: Any]
+    tenant["scope"] = ["id": "alice", "mode": "allocated"]
+    var own = tenant["telemetry"] as! [String: Any]
+    own["worker_cpu_limit"] = 0.5
+    own.removeValue(forKey: "host_total_ram")
+    own.removeValue(forKey: "cpu_total"); own.removeValue(forKey: "cpu_idle")
+    tenant["telemetry"] = own
+    let onlyOwn = try VPSSnapshot.decode(JSONSerialization.data(withJSONObject: tenant))
+    precondition(onlyOwn.scope?.id == "alice" && onlyOwn.ramFraction == 0.2)
+    let tenantCPU = CPUReading(previous: onlyOwn.telemetry, current: second.telemetry)
+    precondition(tenantCPU.worker != nil)
     precondition(Activity(id: "a", agent: "Tests", project: "Widget", status: "failed", started: 100, ended: 132).elapsed(at: Date()) == "00:32")
     precondition(Activity(id: "a", agent: "Tests", project: "Widget", status: "failed", started: 0, ended: 1e300).elapsed(at: Date()) == "1440:00")
     print("Mac model: decoding, real CPU deltas, counter reset, unavailable data, bounds and failed duration passed")

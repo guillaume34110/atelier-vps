@@ -82,3 +82,41 @@ class ResourceTests(unittest.TestCase):
         (self.root / '.leases' / ('a' * 32 + '.json')).write_text('{}')
         with self.assertRaises(RuntimeError):
             r.view(self.root, self.capacity)
+
+    def test_auto_uses_peak_with_headroom_and_never_shrinks_to_free_ram(self):
+        request = {'ram_bytes': None, 'project': 'api', 'argv': ['python3', 'check.py']}
+        self.assertEqual(r.ram_request(self.root, request), (r.GIB, 'unprofiled'))
+        r.remember_ram(self.root, request, 128 * r.MIB, True)
+        self.assertEqual(r.ram_request(self.root, request), (256 * r.MIB, 'measured'))
+        r.remember_ram(self.root, request, 16 * r.MIB, True)
+        self.assertEqual(r.ram_request(self.root, request)[0], 256 * r.MIB)
+        explicit = {**request, 'ram_bytes': r.GIB}
+        self.assertEqual(r.ram_request(self.root, explicit), (r.GIB, 'explicit'))
+        self.capacity['host_available_ram'] = 2 * r.GIB + 320 * r.MIB
+        with self.assertRaises(r.AdmissionError) as error, self.claim('a', **request):
+            pass
+        self.assertEqual(error.exception.admission['reasons'], ['ram'])
+        self.assertEqual(error.exception.admission['requested']['ram_bytes'], 256 * r.MIB)
+
+    def test_auto_profiles_are_dependency_scoped_and_failures_cannot_lower_peak(self):
+        request = {'ram_bytes': None, 'argv': ['node', 'test.js'], 'dependency_digest': 'old'}
+        r.remember_ram(self.root, request, 600 * r.MIB, False)
+        self.assertGreaterEqual(r.ram_request(self.root, request)[0], 600 * r.MIB)
+        self.assertEqual(r.ram_request(self.root, {**request, 'dependency_digest': 'new'})[1], 'unprofiled')
+        (self.root / '.ram-profiles.json').write_text('{"bad":{}}')
+        with self.assertRaises(RuntimeError):
+            r.ram_request(self.root, request)
+
+    def test_peak_survives_drop_and_four_measured_jobs_share_real_headroom(self):
+        request = {'ram_bytes': None, 'project': 'api', 'argv': ['check']}
+        r.remember_ram(self.root, request, 128 * r.MIB, True)
+        self.capacity['host_available_ram'] = 3 * r.GIB + 512 * r.MIB
+        with ExitStack() as tasks:
+            jobs = [tasks.enter_context(self.claim(c, **request)) for c in 'abcd']
+            self.assertEqual(r.view(self.root, self.capacity)['ram_reserved'], r.GIB)
+            jobs[0].update(100 * r.MIB, 0, [], 0, ram_peak=180 * r.MIB)
+            jobs[0].update(20 * r.MIB, 0, [], 0)
+            self.assertEqual(jobs[0].value['ram_peak'], 180 * r.MIB)
+            with self.assertRaises(r.AdmissionError) as error, self.claim('e', **request):
+                pass
+            self.assertIn('slots', error.exception.admission['reasons'])

@@ -20,12 +20,23 @@ configuration personnelle, hors du dépôt.
 
 ```sh
 atelier-vps run --source ./mon-projet --agent "Build · frontend" \
-  --cpus 1 --ram-gib 1 --disk-gib 2 --timeout 900 -- npm run build
+  --cpus 1 --ram-gib auto --disk-gib 2 --timeout 900 -- npm run build
 ```
 
 Les sources sont filtrées et envoyées sans archive locale supplémentaire.
 Node/Python/Java, Chromium et les outils de compilation sont partagés, en lecture
 seule. Les dépendances sont recréées pour Linux ARM64.
+
+Le mode RAM `auto` apprend le plus grand pic observé pour cette commande et ses
+dépendances, puis ajoute 25 % et 64 Mio de marge. La première passe réserve
+jusqu’à 1 Gio. Une valeur explicite reste préférable pour un nouveau travail
+lourd dont le pic est connu. Un refus ne réduit jamais la réservation en silence.
+
+Deux modes sont disponibles : opportuniste pour utiliser la capacité libre d’un
+VPS partagé, ou alloué avec un conteneur, un accès SSH et des quotas privés par
+développeur. Les logiciels communs restent en lecture seule. Les réglages MCP
+administrateur utilisent une identité distincte, sans droits supplémentaires
+pour les calculs. Voir le [guide des pools et du mode équipe](team.md).
 
 La capacité n’est pas découpée en parts figées inutilisables. Jusqu’à quatre
 calculs cohabitent si leurs réservations tiennent réellement. Le volume dédié
@@ -38,8 +49,9 @@ surveillent les usages ; ils ne cloisonnent pas des personnes malveillantes.
 Un refus demande d’attendre ou de choisir une autre machine compatible.
 
 Le [widget Mac](widget.md) affiche deux VU-mètres à aiguilles, les agents actifs,
-leurs réservations et l’espace restant. Graphite, ivoire et touche française,
-avec de vraies mesures.
+leurs réservations et l’espace de l’utilisateur connecté. Français et anglais,
+sections repliables, fenêtre redimensionnable ; collecte arrêtée lorsqu’il est
+masqué et espacée au repos. Graphite, ivoire et touche française.
 
 Un clone seul ne donne pas à une conversation ChatGPT distante accès au Mac.
 L’installation automatique concerne les agents locaux compatibles MCP.

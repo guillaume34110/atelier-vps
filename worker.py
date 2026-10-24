@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import resource
 import shutil
 import signal
 import subprocess
@@ -19,6 +20,7 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from telemetry import process_token, public_label, record_activity, snapshot
 import resources
+from quota_protection import protect_quota
 
 GIB = 1024 ** 3
 MIB = 1024 ** 2
@@ -132,8 +134,30 @@ def status():
             maintenance = False
         except BlockingIOError:
             maintenance = True
+    maintenance = maintenance or os.environ.get('USEVPS_MAINTENANCE') == '1'
     state.update(pool=pool, busy=bool(pool['active_count']) or maintenance, maintenance=maintenance,
-                 admit=not maintenance and resources.fits(pool, 1, 64 * MIB, MIB))
+                 admit=not maintenance and resources.fits(pool, 1, 64 * MIB, MIB),
+                 capabilities={'ram_profiles': True, 'quota_attributes_protected': True},
+                 scope={'id': os.environ.get('USEVPS_TENANT', 'owner'),
+                        'mode': os.environ.get('USEVPS_MODE', 'opportunistic')})
+    return state
+
+
+def public_status():
+    state = status()
+    state['telemetry'] = snapshot(ROOT, state['busy'])
+    telemetry = state['telemetry']
+    telemetry['worker_cpu_limit'] = float(os.environ.get('USEVPS_CPU_LIMIT', resources.cpu_capacity()))
+    if state['scope']['mode'] == 'allocated':
+        for key in ('cpu_total', 'cpu_idle', 'host_total_ram', 'system_disk_total', 'system_disk_free'):
+            telemetry.pop(key, None)
+        telemetry['cpu_count'] = max(1, int(telemetry['worker_cpu_limit']))
+        state['host_available_ram'] = state['pool']['ram_available']
+        state['free_bytes'] = state['workspace_free_bytes']
+        state['reserve_bytes'] = 0
+        state.pop('volume_id', None)
+        for key in ('host_available_bytes', 'host_floor_bytes'):
+            state['pool']['ram_accounting'].pop(key, None)
     return state
 
 
@@ -283,7 +307,7 @@ def run_job(request, stream):
         work.mkdir(parents=True)
         result = {"id": path.name, "status": "running", "argv": argv, "started": time.time(),
                   "agent": agent, "project": project, "runner": process_token(os.getpid()),
-                  "reservation": {k: lease.value[k] for k in ('cpus', 'ram_bytes', 'disk_bytes')}}
+                  "reservation": {k: lease.value[k] for k in ('cpus', 'ram_bytes', 'disk_bytes', 'ram_source')}}
         receipt(path, result)
         try:
             extract(stream, work)
@@ -333,10 +357,13 @@ def run_job(request, stream):
             def measure():
                 state = capacity()
                 pids = descendants()
-                lease.update(process_memory(pids | {os.getpid()}), usage(path), pids, usage(cache))
+                # rusage retains very short, exited children's peaks between samples.
+                child_peak = int(resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss) * (1 if sys.platform == 'darwin' else 1024)
+                lease.update(process_memory(pids | {os.getpid()}), usage(path), pids, usage(cache),
+                             child_peak + process_memory({os.getpid()}))
                 if state['free_bytes'] < state['reserve_bytes'] or state['used_bytes'] > state['budget_bytes'] or lease.value['disk_used'] > peak:
                     return state, 'disk limit'
-                if lease.value['ram_used'] > lease.value['ram_bytes']:
+                if lease.value['ram_peak'] > lease.value['ram_bytes']:
                     return state, 'task memory limit'
                 if state['host_available_ram'] < reserve_ram:
                     return state, 'host memory pressure'
@@ -351,7 +378,7 @@ def run_job(request, stream):
                     reason = resource_reason
                 if reason:
                     break
-                time.sleep(0.5)
+                time.sleep(0.25)
             # Measure before cleanup too: a very short task must not evade its guard.
             _, resource_reason = measure()
             reason = reason or resource_reason
@@ -366,10 +393,19 @@ def run_job(request, stream):
                           returncode=rc, reason=reason, ended=time.time(),
                           resources={"declared_disk_bytes": peak, "growth_bytes": lease.value['disk_used'],
                                      "ram_bytes": lease.value['ram_used'], "cpus": lease.value['cpus'],
+                                     "ram_peak_bytes": lease.value['ram_peak'], "ram_sample_seconds": 0.25,
                                      "total_used_bytes": final["used_bytes"], "physical_free_bytes": final["free_bytes"]})
         except Exception as exc:
             stop_children()
             result.update(status="failed", reason=str(exc), returncode=1, ended=time.time())
+        if result.get('resources') and (result['status'] == 'passed' or result.get('reason') == 'task memory limit'):
+            try:
+                resources.remember_ram(ROOT, request, max(result['resources']['ram_peak_bytes'],
+                                       lease.value['ram_bytes'] if result.get('reason') == 'task memory limit' else 0),
+                                       result['status'] == 'passed')
+                result['ram_profile_saved'] = True
+            except (OSError, ValueError, RuntimeError):
+                result['ram_profile_saved'] = False
         try:
             receipt(path, result)
         except OSError:
@@ -436,6 +472,7 @@ def main():
     action = sys.argv[1]
     if not volume_ok():
         raise RuntimeError("required volume is not mounted")
+    protect_quota()
     if action == "serve":
         validate_environment()
         ensure_receipt_reserve()
@@ -464,9 +501,7 @@ def main():
                 pass
         ThreadingHTTPServer(("0.0.0.0", 8080), Health).serve_forever()
     elif action == "status":
-        result = status()
-        result['telemetry'] = snapshot(ROOT, result['busy'])
-        print(json.dumps(result))
+        print(json.dumps(public_status()))
     elif action == "run":
         result = run_job(read_request(), sys.stdin.buffer)
         print(json.dumps(result))
@@ -484,5 +519,6 @@ if __name__ == "__main__":
     try:
         sys.exit(main())
     except Exception as exc:
-        print(json.dumps({"ok": False, "error": str(exc)}), file=sys.stderr)
+        print(json.dumps({"ok": False, "error": str(exc),
+                          **({'admission': exc.admission} if isinstance(exc, resources.AdmissionError) else {})}), file=sys.stderr)
         sys.exit(1)

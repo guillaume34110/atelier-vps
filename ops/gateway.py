@@ -15,6 +15,22 @@ def main():
     if operation not in {"status", "run", "fetch", "release"}:
         raise ValueError("only status, run, fetch and release are allowed")
     config = json.loads(Path("/etc/usevps-gateway.json").read_text())
+    settings = Path('/etc/atelier-vps-team.json')
+    tenant = None
+    pending = False
+    if settings.exists():
+        state = json.loads(settings.read_text())
+        principal = os.environ.get('SUDO_USER')
+        matches = [(name, value) for name, value in state['tenants'].items()
+                   if value['ssh_user'] == principal and value['enabled']]
+        if len(matches) != 1:
+            raise PermissionError('no developer workspace for this authenticated SSH user')
+        name, tenant = matches[0]
+        config = {**config, 'container': tenant['container'], 'workspace': tenant['workspace']}
+        transaction = Path('/etc/atelier-vps-team.pending.json')
+        pending = transaction.exists() and name in json.loads(transaction.read_text())['affected']
+        if pending and operation == 'run':
+            raise RuntimeError('developer settings update pending; existing results are preserved')
     mount = subprocess.check_output(["findmnt", "-n", "-o", "UUID,OPTIONS", "--mountpoint", config["mount"]], text=True).strip().split()
     if len(mount) != 2 or mount[0] != config["volume_id"] or "prjquota" not in mount[1].split(","):
         raise ValueError("expected volume or project quota is not mounted")
@@ -32,6 +48,19 @@ def main():
         raise ValueError("worker swap, process or CPU limits missing")
     if "ALL" not in (host.get("CapDrop") or []) or not any(x.startswith("no-new-privileges") for x in host.get("SecurityOpt") or []):
         raise ValueError("worker privilege restrictions missing")
+    if tenant:
+        if host['Memory'] != tenant['ram_bytes']:
+            raise ValueError('worker does not match the developer RAM allocation')
+        if tenant.get('network') and set(info.get('NetworkSettings', {}).get('Networks', {})) != {tenant['network']}:
+            raise ValueError('worker does not match the private developer network')
+        if state['policy']['mode'] == 'allocated':
+            if host['CpuShares'] != tenant['cpu_shares']:
+                raise ValueError('worker does not match the developer CPU priority')
+            quota = host.get('NanoCpus', 0) / 1e9
+            if not quota and host.get('CpuPeriod', 0) > 0:
+                quota = host.get('CpuQuota', 0) / host['CpuPeriod']
+            if abs(quota - tenant['cpus']) > 0.000001:
+                raise ValueError('worker does not match the developer CPU allocation')
     expected = {"/workspace": (config["workspace"], True),
                 "/volume-stat": (str(Path(config["mount"]) / ".usevps-stat"), False)}
     dev = Path(config["mount"]) / ".usevps-dev"
@@ -41,7 +70,8 @@ def main():
     if (len(mounts) != len(expected) or {m["Destination"] for m in mounts} != set(expected)
             or any(m.get("Type") != "bind" or (m["Source"], m["RW"]) != expected[m["Destination"]] for m in mounts)):
         raise ValueError("unexpected host mounts")
-    os.execvp("docker", ["docker", "exec", "-i", "--user", "10001:10001", names[0], *WORKER_EXEC, operation])
+    flags = ['--env', 'USEVPS_MAINTENANCE=1'] if pending else []
+    os.execvp("docker", ["docker", "exec", "-i", *flags, "--user", "10001:10001", names[0], *WORKER_EXEC, operation])
 
 
 if __name__ == "__main__":

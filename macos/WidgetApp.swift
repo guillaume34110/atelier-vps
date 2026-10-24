@@ -35,7 +35,7 @@ final class Monitor: ObservableObject {
     @Published var refreshing = false
     @Published var received: Date?
     @Published var latency: Double = 0
-    @Published var error = "Connexion au VPS…"
+    @Published var error = "Connecting…"
     var onUpdate: (() -> Void)?
     var successfulSamples = 0
     var raw = Data()
@@ -108,13 +108,14 @@ final class Monitor: ObservableObject {
         } else {
             connected = false
             failures += 1
-            error = "SSH indisponible · nouvelle tentative automatique"
+            error = "SSH unavailable · retrying automatically"
         }
         onUpdate?()
         if visible {
             timer?.invalidate()
-            let delay = failures > 0 ? min(60, 5 * pow(2, Double(min(failures - 1, 4)))) : (document?.busy == true ? 5.0 : 10.0)
+            let delay = failures > 0 ? min(60, 5 * pow(2, Double(min(failures - 1, 4)))) : (document?.busy == true || successfulSamples < 2 ? 5.0 : 30.0)
             timer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in self?.refresh() }
+            timer?.tolerance = delay * 0.1
         }
     }
 
@@ -204,179 +205,134 @@ private struct Dial: View {
     }
 }
 
+private struct Collapsible<Content: View>: View {
+    let title: String
+    let key: String
+    let content: Content
+    @State private var expanded: Bool
+
+    init(_ title: String, key: String, @ViewBuilder content: () -> Content) {
+        self.title = title; self.key = key; self.content = content()
+        _expanded = State(initialValue: UserDefaults.standard.object(forKey: key) as? Bool ?? true)
+    }
+    var body: some View {
+        DisclosureGroup(isExpanded: $expanded) { content.padding(.top, 8) } label: {
+            Text(L(title)).font(.system(size: 11, weight: .semibold)).foregroundColor(Paint.ivory)
+        }
+        .onChange(of: expanded) { UserDefaults.standard.set(expanded, forKey: key) }
+        .padding(12).background(RoundedRectangle(cornerRadius: 13).fill(.black.opacity(0.12)))
+        .tint(Paint.green)
+    }
+}
+
 private struct WidgetView: View {
     @ObservedObject var monitor: Monitor
     let hide: () -> Void
     let menu: () -> Void
-
+    @AppStorage("atelier-language") private var language = "system"
     private var snapshot: VPSSnapshot? { monitor.document }
-    private var tint: Color { !monitor.connected ? .orange : (snapshot?.busy == true || snapshot?.admit == true ? Paint.green : .orange) }
+    private var tint: Color { monitor.connected ? Paint.green : .orange }
+    private var profile: String { Configuration.host + "." + (snapshot?.scope?.id ?? "owner") }
+    private var unit: String { L("GiB") }
 
     var body: some View {
-        VStack(spacing: 12) {
-            HStack(spacing: 9) {
-                Image(systemName: "gauge.with.dots.needle.67percent").font(.system(size: 20)).foregroundColor(Paint.ivory)
-                Text("Atelier VPS").font(.system(size: 22, weight: .bold, design: .rounded))
-                Spacer()
+        VStack(spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "gauge.with.dots.needle.67percent").foregroundColor(Paint.ivory)
+                Text("Atelier VPS").font(.system(size: 20, weight: .bold, design: .rounded))
+                Spacer(minLength: 4)
                 Circle().fill(tint).frame(width: 7, height: 7)
-                Text(monitor.connected ? "Connecté" : (monitor.received == nil && monitor.refreshing ? "Connexion…" : "Hors ligne"))
-                    .font(.system(size: 11, weight: .medium)).foregroundColor(tint)
+                Text(L(monitor.connected ? "Connected" : "Offline")).font(.system(size: 10)).foregroundColor(tint)
                 Button(action: { monitor.refresh() }) { Image(systemName: "arrow.clockwise") }
-                    .help("Actualiser les mesures").accessibilityLabel("Actualiser les mesures")
-                Button(action: menu) { Image(systemName: "ellipsis") }
-                    .help("Options du widget").accessibilityLabel("Options du widget")
-                Button(action: hide) { Image(systemName: "chevron.down") }
-                    .help("Masquer dans la barre des menus").accessibilityLabel("Masquer le widget")
-            }
-            .buttonStyle(.plain)
-            HStack(spacing: 0) {
-                Color(red: 0.20, green: 0.36, blue: 0.72)
-                Paint.ivory
-                Paint.orange
-            }.frame(height: 2).clipShape(Capsule()).opacity(0.8)
+                    .help(L("Refresh")).accessibilityLabel(L("Refresh"))
+                Button(action: menu) { Image(systemName: "ellipsis") }.help(L("Options")).accessibilityLabel(L("Options"))
+                Button(action: hide) { Image(systemName: "chevron.down") }.help(L("Hide widget")).accessibilityLabel(L("Hide widget"))
+            }.buttonStyle(.plain)
+            HStack(spacing: 0) { Color(red: 0.20, green: 0.36, blue: 0.72); Paint.ivory; Paint.orange }
+                .frame(height: 2).clipShape(Capsule())
             HStack {
-                Text("ARM64 · \(snapshot?.telemetry?.cpu_count.map { String($0) } ?? "—") vCPU · \(snapshot?.agents.count ?? 0) / \(snapshot?.pool?.max_jobs ?? 4) tâches")
+                Text(L(snapshot?.scope?.mode == "allocated" ? "Your allocation" : "Available capacity"))
                 Spacer()
-                Text(!monitor.connected ? "HORS LIGNE" : (snapshot?.busy == true ? "OCCUPÉ" : (snapshot?.admit == true ? "PRÊT" : "EN ATTENTE")))
-                    .fontWeight(.semibold).foregroundColor(tint)
-            }
-            .font(.system(size: 9, design: .monospaced)).foregroundColor(Paint.muted)
-            HStack(spacing: 10) {
-                Dial(title: "CPU VPS", value: percent(monitor.cpu.host), fraction: monitor.cpu.host,
-                     detail: "worker \(percent(monitor.cpu.worker))")
-                Dial(title: "RAM VPS", value: ramValue, fraction: snapshot?.ramFraction,
-                     detail: "\(gib(snapshot?.host_available_ram)) Gio libres · seuil 2 Gio",
-                     danger: ramDanger)
-            }
-            .opacity(monitor.connected ? 1 : 0.5)
-            VStack(alignment: .leading, spacing: 9) {
-                HStack {
-                    label("ESPACE AGENTS")
-                    Spacer()
-                    Text("\(gib(snapshot?.workspace_free_bytes)) Gio libres").font(.system(size: 13, weight: .semibold)).monospacedDigit()
-                }
-                GeometryReader { geometry in
-                    Capsule().fill(.black.opacity(0.25))
-                    Capsule().fill((snapshot?.quotaFraction ?? 0) > 0.9 ? Color.orange : Paint.green)
-                        .frame(width: max(0, geometry.size.width * (snapshot?.quotaFraction ?? 0)))
-                }.frame(height: 7)
-                Text("Quota \(gib(snapshot?.budget_bytes)) Gio · marge \(reserveText)")
-                    .font(.system(size: 10, design: .monospaced)).foregroundColor(Paint.muted)
-                if let pool = snapshot?.pool {
-                    Text("Réservé : \(pool.cpu_reserved) CPU · \(gib(pool.ram_reserved)) Gio RAM · \(gib(pool.disk_reserved)) Gio disque")
-                        .font(.system(size: 9, design: .monospaced)).foregroundColor(Paint.ivory)
-                }
-            }.padding(13).background(card)
-            VStack(alignment: .leading, spacing: 10) {
-                HStack { label("LES AGENTS À L’ATELIER"); Spacer(); Text(stateText).font(.system(size: 10)).foregroundColor(tint) }
-                HStack(spacing: 9) {
-                    node("laptopcomputer", "Mac", active: false)
-                    link
-                    node("person.crop.square", "Agent", active: monitor.connected && snapshot?.active != nil)
-                    link
-                    node("server.rack", "VPS", active: monitor.connected && snapshot?.busy == true)
-                }.padding(.horizontal, 14)
-                if monitor.connected, let agents = snapshot?.agents, !agents.isEmpty {
-                    ForEach(agents) { active in
-                    HStack {
-                        Circle().fill(Paint.green).frame(width: 7, height: 7)
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(active.agent).font(.system(size: 12, weight: .semibold)).lineLimit(1)
-                            Text("\(active.project) · \(active.cpus ?? 1) CPU · \(gib(active.ram_bytes)) Gio RAM")
-                                .font(.system(size: 10)).foregroundColor(Paint.muted).lineLimit(1)
-                        }
-                        Spacer()
-                        Text(active.orphaned == true ? "À vérifier" : "En cours").font(.system(size: 9))
-                            .foregroundColor(active.orphaned == true ? .orange : Paint.green)
-                        TimelineView(.periodic(from: .now, by: 1)) { context in
-                            Text(active.elapsed(at: context.date)).font(.system(size: 11, design: .monospaced))
-                        }
-                    }.padding(9).background(RoundedRectangle(cornerRadius: 8).fill(.white.opacity(0.035)))
+                Text(L(!monitor.connected ? "Offline" : (snapshot?.busy == true ? "Working" : (snapshot?.admit == true ? "Ready" : "Waiting"))))
+            }.font(.system(size: 10)).foregroundColor(Paint.muted)
+            ScrollView {
+                VStack(spacing: 10) {
+                    Collapsible("Resources", key: profile + ".resources") {
+                        HStack(spacing: 8) {
+                            Dial(title: L("YOUR CPU"), value: percent(monitor.cpu.worker), fraction: monitor.cpu.worker,
+                                 detail: LF("Limit %.2f vCPU", snapshot?.telemetry?.worker_cpu_limit ?? Double(snapshot?.pool?.cpu_total ?? 0)))
+                            Dial(title: L("YOUR RAM"), value: gib(snapshot?.telemetry?.worker_ram) + " " + unit,
+                                 fraction: snapshot?.ramFraction,
+                                 detail: LF("Ceiling %@ %@", gib(snapshot?.telemetry?.worker_ram_limit), unit))
+                        }.opacity(monitor.connected ? 1 : 0.5)
+                        VStack(alignment: .leading, spacing: 7) {
+                            Text(LF("Reservable now: %@ %@ RAM", gib(snapshot?.pool?.ram_available), unit))
+                                .foregroundColor(Paint.green)
+                            if let pool = snapshot?.pool {
+                                Text(LF("Committed: %@ %@ RAM", gib(pool.ram_reserved), unit))
+                            }
+                            Divider()
+                            HStack { Text(L("Your storage")); Spacer(); Text(LF("%@ / %@ %@", gib(snapshot?.used_bytes), gib(snapshot?.budget_bytes), unit)) }
+                            ProgressView(value: snapshot?.quotaFraction ?? 0).tint(Paint.green)
+                            Text(LF("Free: %@ %@", gib(snapshot?.workspace_free_bytes), unit)).foregroundColor(Paint.muted)
+                        }.font(.system(size: 11)).frame(maxWidth: .infinity, alignment: .leading)
                     }
-                } else {
-                    Text(!monitor.connected ? "État de l’agent inconnu pendant la déconnexion" : (snapshot?.busy == true ? "Calcul ou maintenance · agent non identifié" : (snapshot?.admit == true ? "Prêt pour le prochain agent" : "En attente de ressources disponibles")))
-                        .font(.system(size: 11)).foregroundColor(Paint.muted).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 8)
-                }
-                if let recent = snapshot?.recent, !recent.isEmpty {
-                    label("ACTIVITÉ RÉCENTE")
-                    ForEach(Array(recent.prefix(3))) { entry in
-                        HStack(spacing: 7) {
-                            Image(systemName: entry.status == "passed" ? "checkmark.circle.fill" : "exclamationmark.circle")
-                                .foregroundColor(entry.status == "passed" ? Paint.green : .orange)
-                            Text(entry.agent).lineLimit(1)
-                            Spacer()
-                            Text(entry.status == "passed" ? "Terminé" : (entry.status == "failed" ? "Échec" : "Interrompu"))
-                            Text(entry.elapsed(at: Date())).monospacedDigit()
-                        }.font(.system(size: 10)).foregroundColor(Paint.muted)
-                        .accessibilityLabel("Activité récente : \(entry.agent), \(entry.status)")
+                    Collapsible("Tasks", key: profile + ".tasks") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(LF("%d / %d tasks", snapshot?.agents.count ?? 0, snapshot?.pool?.max_jobs ?? 4)).foregroundColor(Paint.muted)
+                            if monitor.connected, let agents = snapshot?.agents, !agents.isEmpty {
+                                ForEach(agents) { agent in
+                                    HStack {
+                                        Circle().fill(agent.orphaned == true ? .orange : Paint.green).frame(width: 7, height: 7)
+                                        VStack(alignment: .leading, spacing: 3) {
+                                            Text(agent.agent).fontWeight(.semibold).lineLimit(1)
+                                            Text(agent.project).foregroundColor(Paint.muted).lineLimit(1)
+                                            Text(LF("Reserved: %@ %@ RAM", gib(agent.ram_bytes), unit)).font(.system(size: 10)).foregroundColor(Paint.muted)
+                                        }
+                                        Spacer(minLength: 4)
+                                        Text(agent.elapsed(at: Date())).monospacedDigit()
+                                    }.font(.system(size: 11)).padding(.vertical, 3)
+                                }
+                            } else { Text(L(monitor.connected ? "No active task" : "Task status unavailable")).foregroundColor(Paint.muted) }
+                        }.frame(maxWidth: .infinity, alignment: .leading).font(.system(size: 11))
                     }
-                } else {
-                    Text("L’activité récente apparaîtra après un calcul nommé.")
-                        .font(.system(size: 9)).foregroundColor(Paint.muted)
-                }
-            }.padding(13).background(card)
-            HStack(spacing: 10) {
-                Image(systemName: "memorychip")
-                Text("Worker \(gib(snapshot?.telemetry?.worker_ram)) / \(gib(snapshot?.telemetry?.worker_ram_limit)) Gio")
-                Spacer(minLength: 0)
-                Image(systemName: "internaldrive")
-                Text("Système \(gib(snapshot?.telemetry?.system_disk_free)) Gio libres")
-            }.font(.system(size: 10)).foregroundColor(Paint.muted).padding(.horizontal, 2)
+                    Collapsible("History", key: profile + ".history") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            if let recent = snapshot?.recent, !recent.isEmpty {
+                                ForEach(Array(recent.prefix(3))) { entry in
+                                    HStack(spacing: 7) {
+                                        Image(systemName: entry.status == "passed" ? "checkmark.circle.fill" : "exclamationmark.circle")
+                                            .foregroundColor(entry.status == "passed" ? Paint.green : .orange)
+                                        Text(entry.agent).lineLimit(1)
+                                        Spacer(minLength: 4)
+                                        Text(L(entry.status == "passed" ? "Completed" : "Failed"))
+                                        Text(entry.elapsed(at: Date())).monospacedDigit()
+                                    }.font(.system(size: 10))
+                                }
+                            } else { Text(L("Completed tasks appear here")).font(.system(size: 11)) }
+                        }.foregroundColor(Paint.muted).frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }.id(profile)
+            }
             HStack {
-                TimelineView(.periodic(from: .now, by: 1)) { context in
-                    Text(freshness(at: context.date)).lineLimit(1)
-                }
-                Spacer()
+                Text(freshness).lineLimit(1)
+                Spacer(minLength: 4)
                 Button(action: { NSWorkspace.shared.open(Configuration.dashboard) }) {
-                    Label("Tableau de bord", systemImage: "arrow.up.right.square")
-                }.buttonStyle(.plain).accessibilityLabel("Ouvrir le tableau de bord")
-            }.font(.system(size: 10)).foregroundColor(monitor.connected ? Paint.muted : Color.orange)
+                    Image(systemName: "arrow.up.right.square")
+                }.buttonStyle(.plain).help(L("Dashboard")).accessibilityLabel(L("Dashboard"))
+            }.font(.system(size: 10)).foregroundColor(monitor.connected ? Paint.muted : .orange)
         }
-        .padding(16).frame(width: 480)
-        .fixedSize(horizontal: false, vertical: true)
+        .padding(14).frame(minWidth: 360, idealWidth: 480, maxWidth: .infinity, minHeight: 180, idealHeight: 670, maxHeight: .infinity)
         .foregroundColor(.white.opacity(0.92))
         .background(LinearGradient(colors: [Paint.panel, Paint.background], startPoint: .topLeading, endPoint: .bottomTrailing))
-        .clipShape(RoundedRectangle(cornerRadius: 23))
-        .overlay(RoundedRectangle(cornerRadius: 23).stroke(.white.opacity(0.17), lineWidth: 1))
-        .preferredColorScheme(.dark)
+        .clipShape(RoundedRectangle(cornerRadius: 18))
+        .overlay(RoundedRectangle(cornerRadius: 18).stroke(.white.opacity(0.17), lineWidth: 1))
+        .preferredColorScheme(.dark).environment(\.locale, Locale(identifier: UILanguage.code)).id(language)
     }
-
-    private var card: some View { RoundedRectangle(cornerRadius: 13).fill(.black.opacity(0.12)).overlay(RoundedRectangle(cornerRadius: 13).stroke(.white.opacity(0.09))) }
-    private func label(_ title: String) -> some View { Text(title).font(.system(size: 9, weight: .bold)).tracking(1.1).foregroundColor(Paint.muted) }
-    private var reserveText: String { snapshot.map { "\(Int($0.reserve_bytes / 1048576)) Mio" } ?? "—" }
-    private var ramValue: String {
-        guard let total = snapshot?.telemetry?.host_total_ram, let free = snapshot?.host_available_ram else { return "—" }
-        return "\(gib(max(0, total - free))) / \(gib(total)) Gio"
-    }
-    private var ramDanger: Double {
-        guard let total = snapshot?.telemetry?.host_total_ram, total > 0 else { return 0.75 }
-        return max(0, min(1, 1 - 2 * 1073741824 / total))
-    }
-    private var stateText: String {
-        if !monitor.connected { return "Mesures indisponibles" }
-        if snapshot?.busy == true { return "Calcul en cours" }
-        return snapshot?.admit == true ? "Disponible" : "Ressources insuffisantes"
-    }
-    private var link: some View {
-        GeometryReader { geometry in
-            Path { path in path.move(to: CGPoint(x: 0, y: 14)); path.addLine(to: CGPoint(x: geometry.size.width, y: 14)) }
-                .stroke(monitor.connected && snapshot?.busy == true ? Paint.green : Paint.muted.opacity(0.3), style: StrokeStyle(lineWidth: 1.2, dash: [4, 4]))
-        }.frame(height: 40)
-    }
-    private func node(_ symbol: String, _ title: String, active: Bool) -> some View {
-        VStack(spacing: 4) {
-            Image(systemName: symbol).font(.system(size: 19)).frame(width: 44, height: 32)
-                .foregroundColor(active ? Paint.green : Paint.muted)
-                .background(RoundedRectangle(cornerRadius: 8).fill(.white.opacity(0.035)))
-                .overlay(RoundedRectangle(cornerRadius: 8).stroke(active ? Paint.green.opacity(0.7) : .white.opacity(0.1)))
-            Text(title).font(.system(size: 9)).foregroundColor(Paint.muted)
-        }
-    }
-    private func freshness(at date: Date) -> String {
-        guard let received = monitor.received else { return monitor.error }
-        let age = max(0, Int(date.timeIntervalSince(received)))
-        if !monitor.connected { return "Hors ligne · dernière mesure il y a \(age) s" }
-        return "Mis à jour il y a \(age) s · SSH \(Int(monitor.latency * 1000)) ms"
+    private var freshness: String {
+        guard let received = monitor.received else { return L(monitor.error) }
+        let age = max(0, Int(Date().timeIntervalSince(received)))
+        return monitor.connected ? LF("Updated %d s ago · SSH %d ms", age, Int(monitor.latency * 1000)) : LF("Offline · last sample %d s ago", age)
     }
 }
 
@@ -395,9 +351,11 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NSApp.setActivationPolicy(.accessory)
         let root = WidgetView(monitor: monitor, hide: { [weak self] in self?.hide() }, menu: { [weak self] in self?.showMenu() })
         let host = NSHostingView(rootView: root)
-        let size = host.fittingSize
-        panel = WidgetPanel(contentRect: NSRect(origin: .zero, size: size), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-        panel.title = "Atelier VPS — VPS et agents"
+        let size = NSSize(width: 480, height: 670)
+        panel = WidgetPanel(contentRect: NSRect(origin: .zero, size: size), styleMask: [.borderless, .nonactivatingPanel, .resizable], backing: .buffered, defer: false)
+        panel.minSize = NSSize(width: 360, height: 180)
+        panel.maxSize = NSSize(width: 900, height: 1200)
+        panel.title = "Atelier VPS"
         panel.contentView = host
         panel.delegate = self
         panel.isOpaque = false
@@ -412,13 +370,21 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             panel.setFrameOrigin(NSPoint(x: screen.maxX - size.width - 24, y: max(screen.minY + 24, screen.maxY - size.height - 30)))
         }
         panel.setFrameAutosaveName("usevps-widget")
+        if let screen = panel.screen?.visibleFrame {
+            var frame = panel.frame
+            frame.size.width = min(max(360, frame.width), screen.width)
+            frame.size.height = min(max(180, frame.height), screen.height)
+            frame.origin.x = min(max(screen.minX, frame.minX), screen.maxX - frame.width)
+            frame.origin.y = min(max(screen.minY, frame.minY), screen.maxY - frame.height)
+            panel.setFrame(frame, display: false)
+        }
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         statusItem.button?.image = NSImage(systemSymbolName: "gauge.with.dots.needle.67percent", accessibilityDescription: "usevps")
-        statusItem.button?.toolTip = "Atelier VPS — afficher le widget du VPS"
+        statusItem.button?.toolTip = L("Show widget")
         statusItem.button?.target = self
         statusItem.button?.action = #selector(toggle)
         panel.orderFrontRegardless()
-        monitor.onUpdate = { [weak self] in self?.resizeToContent(); self?.captureIfReady() }
+        monitor.onUpdate = { [weak self] in self?.captureIfReady() }
         monitor.refresh()
         if CommandLine.arguments.contains("--capture") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 45) { [weak self] in
@@ -438,31 +404,32 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
     @objc func showMenu() {
         let menu = NSMenu()
-        for (title, action) in [("Afficher le widget", #selector(show)), ("Masquer", #selector(hide)), ("Actualiser", #selector(refresh))] {
-            let item = NSMenuItem(title: title, action: action, keyEquivalent: ""); item.target = self; menu.addItem(item)
+        for (title, action) in [("Show widget", #selector(show)), ("Hide widget", #selector(hide)), ("Refresh", #selector(refresh))] {
+            let item = NSMenuItem(title: L(title), action: action, keyEquivalent: ""); item.target = self; menu.addItem(item)
         }
-        let pinned = NSMenuItem(title: "Toujours au premier plan", action: #selector(pin(_:)), keyEquivalent: "")
+        let pinned = NSMenuItem(title: L("Always on top"), action: #selector(pin(_:)), keyEquivalent: "")
         pinned.target = self; pinned.state = panel.level == .floating ? .on : .off; menu.addItem(pinned)
         menu.addItem(.separator())
-        let quit = NSMenuItem(title: "Quitter Atelier VPS", action: #selector(quit), keyEquivalent: "q")
+        let languages = NSMenuItem(title: L("Language"), action: nil, keyEquivalent: "")
+        let choices = NSMenu()
+        for (code, title) in [("system", L("System language")), ("fr", "Français"), ("en", "English")] {
+            let item = NSMenuItem(title: title, action: #selector(setLanguage(_:)), keyEquivalent: "")
+            item.target = self; item.representedObject = code
+            item.state = (UserDefaults.standard.string(forKey: "atelier-language") ?? "system") == code ? .on : .off
+            choices.addItem(item)
+        }
+        languages.submenu = choices; menu.addItem(languages)
+        let quit = NSMenuItem(title: L("Quit Atelier VPS"), action: #selector(quit), keyEquivalent: "q")
         quit.target = self; menu.addItem(quit)
         menu.popUp(positioning: nil, at: NSPoint(x: panel.frame.maxX - 120, y: panel.frame.maxY - 44), in: nil)
     }
     func windowShouldClose(_ sender: NSWindow) -> Bool { hide(); return false }
     func applicationWillTerminate(_ notification: Notification) { monitor.stop() }
 
-    private func resizeToContent() {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
-            guard let panel = self?.panel, let view = panel.contentView else { return }
-            view.layoutSubtreeIfNeeded()
-            let size = view.fittingSize
-            guard abs(size.height - panel.frame.height) > 1 else { return }
-            var frame = panel.frame
-            frame.origin.y += frame.height - size.height
-            frame.size = size
-            if let screen = panel.screen?.visibleFrame { frame.origin.y = max(screen.minY + 10, frame.origin.y) }
-            panel.setFrame(frame, display: true)
-        }
+    @objc private func setLanguage(_ sender: NSMenuItem) {
+        guard let code = sender.representedObject as? String, ["system", "fr", "en"].contains(code) else { return }
+        UserDefaults.standard.set(code, forKey: "atelier-language")
+        statusItem.button?.toolTip = L("Show widget")
     }
 
     private func captureIfReady() {
@@ -470,6 +437,17 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
               let index = CommandLine.arguments.firstIndex(of: "--capture"), index + 1 < CommandLine.arguments.count else { return }
         capturing = true
         if CommandLine.arguments.contains("--exercise-controls") {
+            precondition(panel.styleMask.contains(.resizable))
+            let originalSize = panel.frame.size
+            panel.setContentSize(NSSize(width: 390, height: 360))
+            precondition(panel.frame.width == 390 && panel.frame.height == 360)
+            panel.setContentSize(originalSize)
+            let selected = UserDefaults.standard.string(forKey: "atelier-language")
+            let languageItem = NSMenuItem(); languageItem.representedObject = "en"
+            setLanguage(languageItem); precondition(L("Resources") == "Resources")
+            languageItem.representedObject = "fr"
+            setLanguage(languageItem); precondition(L("Resources") == "Ressources")
+            UserDefaults.standard.set(selected ?? "system", forKey: "atelier-language")
             hide(); precondition(!panel.isVisible)
             show(); precondition(panel.isVisible)
             let before = panel.level
@@ -490,7 +468,7 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 guard let png = bitmap.representation(using: .png, properties: [:]) else { throw MonitorError.invalidData }
                 try png.write(to: path, options: .withoutOverwriting)
                 let evidence: [String: Any] = ["source": "real restricted SSH", "samples": monitor.successfulSamples,
-                    "connected": monitor.connected, "cpu_fraction": monitor.cpu.host.map { $0 as Any } ?? NSNull(),
+                    "connected": monitor.connected, "cpu_fraction": monitor.cpu.worker.map { $0 as Any } ?? NSNull(),
                     "bundle": Bundle.main.bundlePath, "window_width": view.bounds.width, "window_height": view.bounds.height,
                     "controls_exercised": CommandLine.arguments.contains("--exercise-controls"),
                     "status": try JSONSerialization.jsonObject(with: monitor.raw)]
