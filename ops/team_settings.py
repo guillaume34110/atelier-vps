@@ -16,9 +16,11 @@ import time
 try:
     from . import team
     from .deploy_lock import deployment_lock
+    from .gateway import server_identity
 except ImportError:
     import team
     from deploy_lock import deployment_lock
+    from gateway import server_identity
 
 STATE = Path('/etc/atelier-vps-team.json')
 BASE = Path('/etc/usevps-gateway.json')
@@ -291,11 +293,16 @@ def main():
     if len(request) > 65536:
         raise ValueError('settings request too large')
     request = json.loads(request)
+    identity = server_identity()
+    if request.get('expected_server_id') is not None and request['expected_server_id'] != identity:
+        raise PermissionError('administrator identity belongs to another server')
     with Path('/etc/atelier-vps-team.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         state = read(STATE)
         if request['action'] == 'get':
             result = {'revision': team.revision(state['policy']), 'policy': state['policy'],
+                      'server_id': identity,
+                      'owner_public_key': state['owner_public_key'],
                       'capacity': state['capacity'], 'tenants': state['tenants'],
                       'pending': read(PENDING) if PENDING.exists() else None,
                       'host_ram_reserve_bytes': team.GIB, 'allocatable_ram_bytes': allocatable_ram(state)}

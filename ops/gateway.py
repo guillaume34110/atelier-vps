@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 """Root-owned, sudo-authorized gateway for the pinned Coolify worker only."""
 import json
+import hashlib
 import os
 from pathlib import Path
 import subprocess
@@ -10,10 +11,17 @@ import sys
 WORKER_EXEC = ["sh", "-c", 'echo 500 > /proc/self/oom_score_adj && exec python3 /app/worker.py "$@"', "usevps"]
 
 
+def server_identity():
+    value = Path('/etc/machine-id').read_bytes().strip()
+    if len(value) != 32 or any(c not in b'0123456789abcdef' for c in value):
+        raise ValueError('stable server identity unavailable')
+    return hashlib.sha256(value).hexdigest()
+
+
 def main():
     operation = os.environ.get("SSH_ORIGINAL_COMMAND", "").strip()
-    if operation not in {"status", "run", "fetch", "release"}:
-        raise ValueError("only status, run, fetch and release are allowed")
+    if operation not in {"status", "plan", "run", "fetch", "release"}:
+        raise ValueError("only status, plan, run, fetch and release are allowed")
     config = json.loads(Path("/etc/usevps-gateway.json").read_text())
     settings = Path('/etc/atelier-vps-team.json')
     tenant = None
@@ -70,7 +78,10 @@ def main():
     if (len(mounts) != len(expected) or {m["Destination"] for m in mounts} != set(expected)
             or any(m.get("Type") != "bind" or (m["Source"], m["RW"]) != expected[m["Destination"]] for m in mounts)):
         raise ValueError("unexpected host mounts")
-    flags = ['--env', 'USEVPS_MAINTENANCE=1'] if pending else []
+    server_id = server_identity()
+    flags = ['--env', 'USEVPS_SERVER_ID=' + server_id]
+    if pending:
+        flags.extend(['--env', 'USEVPS_MAINTENANCE=1'])
     os.execvp("docker", ["docker", "exec", "-i", *flags, "--user", "10001:10001", names[0], *WORKER_EXEC, operation])
 
 

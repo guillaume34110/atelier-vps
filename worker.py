@@ -139,7 +139,7 @@ def status():
     maintenance = maintenance or os.environ.get('USEVPS_MAINTENANCE') == '1'
     state.update(pool=pool, busy=bool(pool['active_count']) or maintenance, maintenance=maintenance,
                  admit=not maintenance and resources.fits(pool, 1, 64 * MIB, MIB),
-                 capabilities={'ram_profiles': True, 'quota_attributes_protected': True, 'failure_details': True},
+                 capabilities={'ram_profiles': True, 'quota_attributes_protected': True, 'failure_details': True, 'planning': True},
                  scope={'id': os.environ.get('USEVPS_TENANT', 'owner'),
                         'mode': os.environ.get('USEVPS_MODE', 'opportunistic')})
     return state
@@ -147,6 +147,9 @@ def status():
 
 def public_status():
     state = status()
+    server_id = os.environ.get('USEVPS_SERVER_ID')
+    if server_id and re.fullmatch('[a-f0-9]{64}', server_id):
+        state['server_id'] = server_id
     state['telemetry'] = snapshot(ROOT, state['busy'])
     telemetry = state['telemetry']
     telemetry['cache_retention'] = dependency_cache.status(ROOT)
@@ -284,18 +287,31 @@ def process_memory(pids):
     return total
 
 
-def run_job(request, stream):
+def validate_job_request(request):
     argv = request.get("argv")
     timeout = request.get("timeout", 1800)
     peak = request.get("disk_bytes", GIB)
-    agent = public_label(request.get("agent"), "Agent non identifié")
-    project = public_label(request.get("project"), "Projet non identifié")
     if not isinstance(argv, list) or not argv or not all(isinstance(x, str) and "\x00" not in x for x in argv):
         raise ValueError("argv must be a nonempty string array")
     if not isinstance(timeout, int) or not 1 <= timeout <= 3600:
         raise ValueError("timeout must be 1..3600 seconds")
     if not isinstance(peak, int) or not 0 < peak <= JOB_LIMIT:
         raise ValueError("declared disk peak must fit the dedicated volume (maximum 32 GiB)")
+    return argv, timeout, peak
+
+
+def plan(request):
+    validate_job_request(request)
+    needed = resources.requested(ROOT, request)
+    state = public_status()
+    admission = resources.admission(state['pool'], needed['cpus'], needed['ram_bytes'], needed['disk_bytes'], state['maintenance'])
+    return {'ok': state['ok'], 'scope': state['scope'], 'requested': needed, 'admission': admission}
+
+
+def run_job(request, stream):
+    argv, timeout, peak = validate_job_request(request)
+    agent = public_label(request.get("agent"), "Agent non identifié")
+    project = public_label(request.get("project"), "Projet non identifié")
     ident = uuid.uuid4().hex
     with resources.reserve(ROOT, ident, request, capacity) as lease:
         with resources.resource_lock(ROOT):
@@ -532,6 +548,8 @@ def main():
         result = run_job(read_request(), sys.stdin.buffer)
         print(json.dumps(result))
         return 0 if result["status"] == "passed" else 1
+    elif action == 'plan':
+        print(json.dumps(plan(read_request())))
     elif action == "fetch":
         fetch(read_request(), sys.stdout.buffer)
     elif action == "release":

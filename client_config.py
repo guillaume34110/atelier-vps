@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import re
 import fcntl
+import hashlib
 import tempfile
 
 MAX_CONNECTIONS = 16
@@ -71,7 +72,7 @@ def connections():
     if not path.exists():
         values = load()
         profile = {'id': 'default', 'name': values.get('server_name', 'Atelier VPS'),
-                   'team': values.get('team_name', 'Personnel'), 'ssh_host': host()}
+                   'team': values.get('team_name', 'Personnel'), 'ssh_host': valid_alias(values.get('ssh_host', 'dev-vps'))}
         if values.get('admin_ssh_host') or os.environ.get('ATELIER_VPS_ADMIN_HOST'):
             profile['admin_ssh_host'] = admin_host()
         return [validate_connection(profile)]
@@ -93,7 +94,11 @@ def active_connections():
     values = [row for row in connections() if row['enabled']]
     override = os.environ.get('ATELIER_VPS_HOST')
     if override:
-        return [connection(override)]
+        matches = [row for row in connections() if override in {row['id'], row['ssh_host']}]
+        if matches:
+            return matches
+        return [validate_connection({'id':'env-'+hashlib.sha256(override.encode()).hexdigest()[:16],
+            'name':override, 'team':'Personnel', 'ssh_host':valid_alias(override)})]
     return values
 
 
@@ -135,6 +140,10 @@ def save_connection(value):
         fcntl.flock(lock, fcntl.LOCK_EX)
         path = directory / 'connections.json'
         rows = connections() if path.exists() or config_path().exists() else []
+        previous = next((row for row in rows if row['id'] == value['id']), None)
+        if previous and (previous['ssh_host'] != value['ssh_host']
+                or any(previous.get(k) and previous[k] != value.get(k) for k in ['scope','server_id'])):
+            raise ValueError('use a new connection ID when changing its server or workspace; old results must stay addressable')
         rows = [row for row in rows if row['id'] != value['id']]
         if any(row['ssh_host'] == value['ssh_host'] for row in rows) or len(rows) >= MAX_CONNECTIONS:
             raise ValueError('duplicate SSH alias or connection limit reached')

@@ -252,17 +252,27 @@ class Lease:
         return mask
 
 
-@contextmanager
-def reserve(root, ident, request, capacity):
+def requested(root, request):
     cpus = request.get('cpus', 1)
     ram, ram_source = ram_request(root, request)
     disk = request.get('disk_bytes', GIB)
-    if type(cpus) is not int or not 1 <= cpus <= cpu_capacity():
+    if type(cpus) is not int or not 1 <= cpus <= 4096:
         raise ValueError('CPU reservation must fit the worker pool')
-    if type(ram) is not int or not 64 * MIB <= ram <= memory_capacity():
-        raise ValueError(f'RAM reservation {ram} bytes must be at least 64 MiB and fit the {memory_capacity()} byte worker pool')
+    if type(ram) is not int or ram < 64 * MIB:
+        raise ValueError('RAM reservation must be at least 64 MiB')
     if type(disk) is not int or disk <= 0:
         raise ValueError('disk reservation must be positive')
+    return {'cpus': cpus, 'ram_bytes': ram, 'disk_bytes': disk, 'ram_source': ram_source}
+
+
+@contextmanager
+def reserve(root, ident, request, capacity):
+    value = requested(root, request)
+    cpus, ram, disk, ram_source = (value[k] for k in ('cpus', 'ram_bytes', 'disk_bytes', 'ram_source'))
+    if cpus > cpu_capacity():
+        raise ValueError('CPU reservation must fit the worker pool')
+    if ram > memory_capacity():
+        raise ValueError(f'RAM reservation {ram} bytes must be at least 64 MiB and fit the {memory_capacity()} byte worker pool')
     core_ids = sorted(os.sched_getaffinity(0)) if hasattr(os, 'sched_getaffinity') else list(range(cpu_capacity()))
     core_ids = core_ids[:cpu_capacity()]
     end = time.monotonic() + float(os.environ.get('USEVPS_QUEUE_WAIT_SECONDS', '30'))
