@@ -587,7 +587,12 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @objc func show() { panel.orderFrontRegardless(); monitor.setVisible(true) }
     @objc func hide() { panel.orderOut(nil); monitor.setVisible(false) }
     @objc func refresh() { monitor.refresh() }
-    @objc func quit() { NSApp.terminate(nil) }
+    @objc func quit() {
+        if administration.applying { NSApp.terminate(nil); return }
+        failures.selected = nil
+        if let sheet = panel.attachedSheet { panel.endSheet(sheet); sheet.orderOut(nil) }
+        DispatchQueue.main.async { NSApp.terminate(nil) }
+    }
     @objc func pin(_ sender: NSMenuItem) {
         panel.level = panel.level == .floating ? .normal : .floating
         sender.state = panel.level == .floating ? .on : .off
@@ -766,7 +771,9 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func captureFailure(index: Int) {
         if failures.selected == nil {
-            guard let activity = monitor.document?.recent.first(where: { $0.status == "failed" }) else {
+            let arguments = CommandLine.arguments
+            let expected = arguments.firstIndex(of: "--failure-id").flatMap { $0 + 1 < arguments.count ? arguments[$0 + 1] : nil }
+            guard let activity = monitor.document?.recent.first(where: { $0.status == "failed" && (expected == nil || $0.id == expected) }) else {
                 fputs("No real failed activity available for the failure-card scenario\n", stderr); exit(1)
             }
             failures.open(activity)
