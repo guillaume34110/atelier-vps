@@ -1,6 +1,9 @@
 FROM scratch
 COPY ops/rootfs/ /
 COPY worker.py telemetry.py resources.py dependency_cache.py diagnostics.py quota_protection.py AGENTS.md /app/
+COPY accounts.py desktop_runtime.py desktop_service.py /app/
+COPY ops/agent-toolchain.json /app/agent-toolchain.json
+COPY scripts/desktop_probe.py /app/desktop_probe.py
 COPY ops/toolchain-lock.json /app/toolchain-lock.json
 COPY ops/worker_storage_guard.py /app/storage-guard.py
 COPY ops/worker_storage_guard.py /Users/guillaumegaillard/.local/bin/storage-guard.py

@@ -15,7 +15,7 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
                 tools = await client.list_tools()
                 self.assertEqual({t.name for t in tools.tools}, {'vps_status', 'vps_run', 'vps_fetch', 'vps_release',
                     'admin_settings_get', 'admin_settings_preview', 'admin_settings_apply', 'admin_invitation_create',
-                    'vps_server_add','vps_connect_from_clipboard'})
+                    'vps_server_add','vps_connect_from_clipboard', 'vps_agent_desktop'})
                 result = await client.call_tool('vps_status')
                 self.assertFalse(result.is_error)
                 self.assertTrue(result.structured_content['ok'])
@@ -36,4 +36,15 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
             async with Client(mcp_server.server) as client:
                 result = await client.call_tool('admin_settings_get')
                 self.assertTrue(result.is_error)
+            transport.assert_not_called()
+
+    async def test_desktop_cannot_expose_tickets_or_stop_unconfirmed_work(self):
+        with patch.object(mcp_server.vps, 'transport') as transport:
+            async with Client(mcp_server.server) as client:
+                for action in ['ticket', 'stream', 'stop']:
+                    result = await client.call_tool('vps_agent_desktop', {'action': action})
+                    self.assertTrue(result.is_error)
+                for ram in [0, -1, 6]:
+                    result = await client.call_tool('vps_agent_desktop', {'action': 'start', 'ram_gib': ram})
+                    self.assertTrue(result.is_error)
             transport.assert_not_called()

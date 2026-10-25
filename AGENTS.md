@@ -114,3 +114,16 @@ lecture seule dans l'image, à `/app/AGENTS.md`.
   L'installation SSH compare les règles des accès existants avant rechargement.
   La recette complète inclut une vraie authentification SSH isolée : mauvais
   hôte refusé, ancien accès conservé, réutilisation du lien et shell refusés.
+- Le bureau distant optionnel utilise le même pool et la même limite de 3 600 s.
+  Un seul programme graphique par membre, avec les calculs ordinaires conservés.
+  Vérifier le vrai lancement des programmes et le transport RFB authentifié avant
+  de déclarer cette fonction validée. La connexion aux comptes reste une action
+  humaine dans les programmes officiels ; aucune clé API d'inférence n'est créée.
+  Les profils et projets sont persistants hors des caches gérés et exclus des
+  sources transférées. Les tickets VNC et codes de connexion ne doivent jamais
+  entrer dans le suivi, les journaux, le dépôt ou les réponses MCP. Aucun port
+  VNC public, hyperviseur, privilège ou worker supplémentaire de débordement.
+  Conserver les neuf montages hôte explicites et le seul `/tmp` temporaire de
+  8 Mio en RAM, sans exécution, avec UID/GID 10001. La limite de 512 processus
+  et threads laisse de la place au contrôle pendant le démarrage des interfaces ;
+  la recette vérifie l'absence de dépassement et une marge de 32 threads.

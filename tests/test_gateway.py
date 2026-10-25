@@ -7,7 +7,7 @@ from ops import gateway
 
 class GatewayTests(unittest.TestCase):
     def test_reject_command_injection_before_any_host_access(self):
-        for value in ["sh", "run;id", "status --privileged", "fetch ../secret", ""]:
+        for value in ["sh", "run;id", "status --privileged", "fetch ../secret", "desktop;id", "desktop --host other", ""]:
             with patch.dict(os.environ, {"SSH_ORIGINAL_COMMAND": value}), patch.object(gateway.Path, "read_text") as read:
                 with self.assertRaises(ValueError):
                     gateway.main()
@@ -43,18 +43,27 @@ class GatewayTests(unittest.TestCase):
                   {"Type": "bind", "Destination": "/lib64", "Source": "/mnt/volume/.usevps-dev/usr/lib64", "RW": False},
                   {"Type": "bind", "Destination": "/etc", "Source": "/mnt/volume/.usevps-dev/etc", "RW": False},
                   {"Type": "bind", "Destination": "/opt", "Source": "/mnt/volume/.usevps-dev/opt", "RW": False}]
-        for writable in [False, True]:
+        good = {'/tmp': gateway.DESKTOP_TMPFS}
+        cases = [('status', False, {}, 256, True), ('status', False, good, 512, True),
+                 ('desktop', False, good, 512, True), ('desktop', True, good, 512, False),
+                 ('desktop', False, {}, 256, False), ('desktop', False, good, 256, False),
+                 ('status', False, {}, 512, False), ('status', False, good, 768, False),
+                 ('status', False, {'/tmp': gateway.DESKTOP_TMPFS + ',size=1g'}, 512, False),
+                 ('desktop', False, {**good, '/run': 'rw'}, 512, False)]
+        for operation, writable, temporary, pids, allowed in cases:
             mounts[1]["RW"] = writable
+            host['Tmpfs'] = temporary
+            host['PidsLimit'] = pids
             info = [{"HostConfig": host, "Mounts": mounts, "State": {"Health": {"Status": "healthy"}}}]
-            with patch.dict(os.environ, {"SSH_ORIGINAL_COMMAND": "status"}), patch.object(gateway.Path, "read_text", return_value=json.dumps(config)), patch.object(gateway.subprocess, "check_output", side_effect=["uuid rw,prjquota", "container", json.dumps(info)]), patch.object(gateway.os, "execvp") as execute:
-                if writable:
+            with patch.dict(os.environ, {"SSH_ORIGINAL_COMMAND": operation}), patch.object(gateway.Path, "read_text", return_value=json.dumps(config)), patch.object(gateway.subprocess, "check_output", side_effect=["uuid rw,prjquota", "container", json.dumps(info)]), patch.object(gateway.os, "execvp") as execute:
+                if not allowed:
                     with self.assertRaises(ValueError):
                         gateway.main()
                     execute.assert_not_called()
                 else:
                     with patch.object(gateway, 'server_identity', return_value='a'*64):
                         gateway.main()
-                    self.assertEqual(execute.call_args.args[1][-1], "status")
+                    self.assertEqual(execute.call_args.args[1][-1], operation)
                     self.assertIn('USEVPS_SERVER_ID='+'a'*64, execute.call_args.args[1])
 
     def test_server_identity_is_opaque_and_stable_across_teams(self):

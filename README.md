@@ -20,6 +20,8 @@ analog CPU/RAM gauges, connected agents, transfers and timestamped activity.
 Its Global view adds your connected pools, then shows each server and team.
 Add servers with the widget or agent; join a team with a private one-use link.
 See [multiple servers and invitations](docs/fleet.md).
+The optional [remote programs](docs/agents.md) run official desktop applications
+on the VPS, with account sign-in and private screen sharing from the widget.
 
 No public worker port is required. The local client and MCP server use a
 restricted SSH gateway. Your credentials stay in your own SSH configuration.

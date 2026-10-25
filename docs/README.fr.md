@@ -11,6 +11,11 @@ Le client, MCP et le widget Mac passent par une clé SSH restreinte. Aucun accè
 administrateur n’est fourni aux calculs. Les secrets restent dans votre
 configuration personnelle, hors du dépôt.
 
+L’onglet **Agents** ouvre les programmes officiels ChatGPT/Codex ou Claude
+Desktop sur le VPS, avec un bureau distant privé. Connectez-vous à votre compte
+dans ce programme ; aucune clé API d’inférence n’est nécessaire.
+Voir le [guide des programmes distants](agents.md), notamment la portée de Cowork.
+
 1. Préparez votre VPS avec le [guide serveur](deployment.md).
 2. Configurez l’alias SSH, puis lancez `python3 scripts/install.py --host dev-vps`.
 3. Vérifiez `atelier-vps status`. Avec uv et un CLI Codex fonctionnel,

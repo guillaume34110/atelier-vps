@@ -139,7 +139,8 @@ def status():
     maintenance = maintenance or os.environ.get('USEVPS_MAINTENANCE') == '1'
     state.update(pool=pool, busy=bool(pool['active_count']) or maintenance, maintenance=maintenance,
                  admit=not maintenance and resources.fits(pool, 1, 64 * MIB, MIB),
-                 capabilities={'ram_profiles': True, 'quota_attributes_protected': True, 'failure_details': True, 'planning': True},
+                 capabilities={'ram_profiles': True, 'quota_attributes_protected': True, 'failure_details': True,
+                               'planning': True, 'desktop_sessions': True},
                  scope={'id': os.environ.get('USEVPS_TENANT', 'owner'),
                         'mode': os.environ.get('USEVPS_MODE', 'opportunistic')})
     return state
@@ -151,6 +152,11 @@ def public_status():
     if server_id and re.fullmatch('[a-f0-9]{64}', server_id):
         state['server_id'] = server_id
     state['telemetry'] = snapshot(ROOT, state['busy'])
+    import desktop_service
+    try:
+        state['desktop'] = desktop_service.status(ROOT)
+    except (OSError, ValueError, RuntimeError, TypeError, AttributeError):
+        state['desktop'] = {'available': False, 'active': False, 'error': 'Desktop metadata requires inspection.'}
     telemetry = state['telemetry']
     telemetry['cache_retention'] = dependency_cache.status(ROOT)
     telemetry['worker_cpu_limit'] = float(os.environ.get('USEVPS_CPU_LIMIT', resources.cpu_capacity()))
@@ -308,11 +314,13 @@ def plan(request):
     return {'ok': state['ok'], 'scope': state['scope'], 'requested': needed, 'admission': admission}
 
 
-def run_job(request, stream):
+def run_job(request, stream, *, ident=None, persistent=None, profile_ready=None):
     argv, timeout, peak = validate_job_request(request)
     agent = public_label(request.get("agent"), "Agent non identifié")
     project = public_label(request.get("project"), "Projet non identifié")
-    ident = uuid.uuid4().hex
+    ident = ident or uuid.uuid4().hex
+    if not re.fullmatch('[a-f0-9]{32}', ident):
+        raise ValueError('invalid internal job identity')
     with resources.reserve(ROOT, ident, request, capacity) as lease:
         with resources.resource_lock(ROOT):
             if not ensure_receipt_reserve():
@@ -326,6 +334,7 @@ def run_job(request, stream):
         path = ROOT / "jobs" / ident
         work = path / "work"
         work.mkdir(parents=True)
+        persistent_start = usage(persistent) if persistent else 0
         result = {"id": path.name, "status": "running", "argv": argv, "timeout": timeout, "started": time.time(),
                   "agent": agent, "project": project, "runner": process_token(os.getpid()),
                   "reservation": {k: lease.value[k] for k in ('cpus', 'ram_bytes', 'disk_bytes', 'ram_source')}}
@@ -381,7 +390,8 @@ def run_job(request, stream):
                 pids = descendants()
                 # rusage retains very short, exited children's peaks between samples.
                 child_peak = int(resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss) * (1 if sys.platform == 'darwin' else 1024)
-                lease.update(process_memory(pids | {os.getpid()}), usage(path), pids, usage(cache),
+                persistent_growth = max(0, usage(persistent) - persistent_start) if persistent else 0
+                lease.update(process_memory(pids | {os.getpid()}), usage(path) + persistent_growth, pids, usage(cache),
                              child_peak + process_memory({os.getpid()}))
                 if state['free_bytes'] < state['reserve_bytes'] or state['used_bytes'] > state['budget_bytes'] or lease.value['disk_used'] > peak:
                     return state, 'disk limit'
@@ -422,11 +432,14 @@ def run_job(request, stream):
             result.update(status="failed", reason=str(exc), returncode=1, ended=time.time())
         if result.get('resources') and (result['status'] == 'passed' or result.get('reason') == 'task memory limit'):
             try:
-                resources.remember_ram(ROOT, request, max(result['resources']['ram_peak_bytes'],
-                                       lease.value['ram_bytes'] if result.get('reason') == 'task memory limit' else 0),
-                                       result['status'] == 'passed')
-                result['ram_profile_saved'] = True
-            except (OSError, ValueError, RuntimeError):
+                if profile_ready is None or result.get('reason') == 'task memory limit' or profile_ready():
+                    resources.remember_ram(ROOT, request, max(result['resources']['ram_peak_bytes'],
+                                           lease.value['ram_bytes'] if result.get('reason') == 'task memory limit' else 0),
+                                           result['status'] == 'passed')
+                    result['ram_profile_saved'] = True
+                else:
+                    result['ram_profile_saved'] = False
+            except (OSError, ValueError, RuntimeError, TypeError, AttributeError):
                 result['ram_profile_saved'] = False
         try:
             receipt(path, result)
@@ -550,6 +563,9 @@ def main():
         return 0 if result["status"] == "passed" else 1
     elif action == 'plan':
         print(json.dumps(plan(read_request())))
+    elif action == 'desktop':
+        import desktop_service
+        desktop_service.dispatch(read_request())
     elif action == "fetch":
         fetch(read_request(), sys.stdout.buffer)
     elif action == "release":

@@ -40,6 +40,8 @@ final class Monitor: ObservableObject {
     @Published var compact = false
     @Published var servers: [ServerSample] = []
     @Published var selectedID: String?
+    @Published var showingAgents = false
+    let agents = RemoteAgentsControl()
     var onUpdate: (() -> Void)?
     var successfulSamples = 0
     var raw = Data()
@@ -342,13 +344,16 @@ private struct WidgetView: View {
             HStack(spacing: 0) { Color(red: 0.20, green: 0.36, blue: 0.72); Paint.ivory; Paint.orange }
                 .frame(height: 2).clipShape(Capsule())
             FleetPicker(monitor: monitor, admin: admin)
-            if admin.authorized {
-                Picker(L("Widget section"), selection: $admin.showingManagement) {
-                    Text(L("Monitoring")).tag(false)
-                    Text(L("Management")).tag(true)
-                }.pickerStyle(.segmented).labelsHidden().accessibilityIdentifier("widget-section")
-            }
-            if admin.authorized && admin.showingManagement {
+            Picker(L("Widget section"), selection: Binding(get: {
+                monitor.showingAgents ? 1 : admin.authorized && admin.showingManagement ? 2 : 0
+            }, set: { value in monitor.showingAgents = value == 1; admin.showingManagement = value == 2 })) {
+                Text(L("Monitoring")).tag(0)
+                Text(L("Agents")).tag(1)
+                if admin.authorized { Text(L("Management")).tag(2) }
+            }.pickerStyle(.segmented).labelsHidden().accessibilityIdentifier("widget-section")
+            if monitor.showingAgents {
+                AgentsView(monitor: monitor, control: monitor.agents)
+            } else if admin.authorized && admin.showingManagement {
                 AdminView(admin: admin)
             } else {
             HStack {
@@ -746,7 +751,7 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func windowDidMove(_ notification: Notification) {
         if !monitor.compact && !CommandLine.arguments.contains("--capture") { panel.saveFrame(usingName: "usevps-widget") }
     }
-    func applicationWillTerminate(_ notification: Notification) { monitor.stop(); failures.cancel() }
+    func applicationWillTerminate(_ notification: Notification) { monitor.stop(); monitor.agents.disconnect(); failures.cancel() }
 
     @objc private func setLanguage(_ sender: NSMenuItem) {
         guard let code = sender.representedObject as? String, ["system", "fr", "en"].contains(code) else { return }
@@ -921,6 +926,7 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             layouts += [("admin-narrow", 360, 620, false, true), ("admin", 480, 740, false, true),
                         ("admin-wide", 720, 800, false, true)]
         }
+        layouts += [("agents-narrow", 360, 640, false, false), ("agents-wide", 720, 720, false, false)]
         let originalFrame = panel.frame, originalPolicy = administration.draft
         var evidence: [[String: Any]] = []
         func next(_ index: Int) {
@@ -929,12 +935,15 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     try JSONSerialization.data(withJSONObject: evidence, options: [.sortedKeys, .prettyPrinted])
                         .write(to: path.deletingLastPathComponent().appendingPathComponent("widget-layouts.json"), options: .withoutOverwriting)
                     setCompact(false); panel.setFrame(originalFrame, display: true)
+                    monitor.showingAgents = false
                     administration.showingManagement = false; administration.draft = originalPolicy
                     if CommandLine.arguments.contains("--exit-after-capture") { quit() }
                 } catch { fputs("Layout receipt failed: \(error)\n", stderr); exit(1) }
                 return
             }
             let (name, width, height, mini, admin) = layouts[index]
+            let agents = name.hasPrefix("agents-")
+            monitor.showingAgents = agents
             administration.showingManagement = admin
             if admin { administration.selectMode("allocated") }
             panel.setContentSize(NSSize(width: width, height: height))
@@ -948,12 +957,13 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { throw MonitorError.invalidData }
                     view.cacheDisplay(in: view.bounds, to: bitmap)
                     let facePixels = meterFacePixels(bitmap)
-                    if !mini && !admin && height >= 500 { precondition(facePixels >= 1000) }
+                    if !mini && !admin && !agents && height >= 500 { precondition(facePixels >= 1000) }
                     guard let png = bitmap.representation(using: .png, properties: [:]) else { throw MonitorError.invalidData }
                     let image = path.deletingLastPathComponent().appendingPathComponent("widget-\(name).png")
                     try png.write(to: image, options: .withoutOverwriting)
                     evidence.append(["layout": name, "width": width, "height": height, "image": image.lastPathComponent,
                                      "mini": mini, "management": admin, "administrator_authenticated": administration.authorized,
+                                     "agents": agents,
                                      "resolved_layout": WidgetLayout.resolve(width: width, height: height).rawValue,
                                      "meter_face_pixels": facePixels,
                                      "server_mode": monitor.document?.scope?.mode ?? "unknown", "settings_applied": false])
@@ -969,7 +979,7 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 struct WidgetMain {
     static func main() {
         if CommandLine.arguments.contains("--self-test") {
-            do { try runModelChecks(); try runFleetChecks(); try runAdminChecks(); try runFailureChecks() } catch { fputs("Mac model checks failed: \(error)\n", stderr); exit(1) }
+            do { try runModelChecks(); try runFleetChecks(); try runAgentChecks(); try runAdminChecks(); try runFailureChecks() } catch { fputs("Mac model checks failed: \(error)\n", stderr); exit(1) }
             return
         }
         let application = NSApplication.shared

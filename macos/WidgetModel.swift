@@ -105,10 +105,12 @@ struct VPSSnapshot: Codable {
     var scope: UserScope? = nil
     var maintenance: Bool? = nil
     var server_id: String? = nil
+    var desktop: DesktopSession? = nil
 
     static func decode(_ data: Data) throws -> VPSSnapshot {
         guard data.count <= 65536 else { throw MonitorError.invalidData }
         let value = try JSONDecoder().decode(VPSSnapshot.self, from: data)
+        guard value.desktop?.valid ?? true else { throw MonitorError.invalidData }
         let numbers = [value.budget_bytes, value.workspace_free_bytes, value.used_bytes,
                        value.free_bytes, value.reserve_bytes, value.host_available_ram]
         guard value.ok, value.budget_bytes > 0,

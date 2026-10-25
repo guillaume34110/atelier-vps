@@ -9,6 +9,7 @@ import sys
 
 # Compose 2.6 ignores oom_score_adj; enforce it in each unprivileged process.
 WORKER_EXEC = ["sh", "-c", 'echo 500 > /proc/self/oom_score_adj && exec python3 /app/worker.py "$@"', "usevps"]
+DESKTOP_TMPFS = 'rw,noexec,nosuid,nodev,size=8388608,mode=0700,uid=10001,gid=10001'
 
 
 def server_identity():
@@ -20,8 +21,8 @@ def server_identity():
 
 def main():
     operation = os.environ.get("SSH_ORIGINAL_COMMAND", "").strip()
-    if operation not in {"status", "plan", "run", "fetch", "release"}:
-        raise ValueError("only status, plan, run, fetch and release are allowed")
+    if operation not in {"status", "plan", "run", "fetch", "release", "desktop"}:
+        raise ValueError("unsupported worker operation")
     config = json.loads(Path("/etc/usevps-gateway.json").read_text())
     settings = Path('/etc/atelier-vps-team.json')
     tenant = None
@@ -52,10 +53,15 @@ def main():
     mounts = info["Mounts"]
     if host["Privileged"] or not host["ReadonlyRootfs"] or not 0 < host["Memory"] <= 5 * 1024 ** 3:
         raise ValueError("worker isolation or memory limit missing")
-    if host.get("MemorySwap") != host["Memory"] or not 0 < host.get("PidsLimit", 0) <= 256 or not 0 < host.get("CpuShares", 0) <= 128:
+    if host.get("MemorySwap") != host["Memory"] or not 0 < host.get("PidsLimit", 0) <= 512 or not 0 < host.get("CpuShares", 0) <= 128:
         raise ValueError("worker swap, process or CPU limits missing")
     if "ALL" not in (host.get("CapDrop") or []) or not any(x.startswith("no-new-privileges") for x in host.get("SecurityOpt") or []):
         raise ValueError("worker privilege restrictions missing")
+    temporary = host.get('Tmpfs') or {}
+    if (temporary not in ({}, {'/tmp': DESKTOP_TMPFS})
+            or host['PidsLimit'] > 256 and not temporary
+            or operation == 'desktop' and (not temporary or host['PidsLimit'] != 512)):
+        raise ValueError('unexpected temporary filesystem or missing bounded GUI process capacity')
     if tenant:
         if host['Memory'] != tenant['ram_bytes']:
             raise ValueError('worker does not match the developer RAM allocation')
