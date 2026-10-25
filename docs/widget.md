@@ -26,6 +26,18 @@ The widget distinguishes the memory ceiling, committed reservations and RAM
 reservable now. Unknown readings, offline samples and maintenance are identified.
 Public labels are limited to 64 characters; keep secrets out of them.
 
+Click a failed activity to open its explanation, exit code, measured RAM/disk
+figures and a short log excerpt. This uses the ordinary authenticated `fetch`
+connection and verifies SHA256 before displaying a card. The worker keeps eight
+bounded private failure cards, including after a job is explicitly released;
+original receipts and result files are not automatically purged. Common
+credential formats are masked. Logs and failure reasons never enter public
+status telemetry. Older or unreachable details show a retryable unavailable state.
+
+Both meters share one 55,518-byte PNG face at a fixed 16:9 ratio. The original
+ivory artwork is compressed without changing pixels; only the needle and pivot
+overlay are drawn dynamically, using the same uniform scale as the image.
+
 One monitoring SSH request is in flight at a time. Polling uses 5 seconds with active jobs or transfers and
 30 seconds when idle, backs off to 60 seconds on failure and stops while hidden.
 There are no per-second timers; a localized timestamp identifies the last sample.
@@ -82,3 +94,5 @@ changes local drafts only; it does not apply policy. Screenshots prove that pass
 The optional `--admin` check also exercises the real administrator
 get/preview/apply transport with an unchanged policy, then verifies it by reading
 the policy again. It refuses to apply any preview that affects a member.
+Use `--failure` separately to click a real failed activity, verify its private
+report and capture the resulting native sheet.

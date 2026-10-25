@@ -65,6 +65,11 @@ lecture seule dans l'image, à `/app/AGENTS.md`.
   via l'alias administrateur séparé et utilise get/preview/apply avec révision.
   Vérifier le build macOS et son rendu réel à plusieurs tailles, avec les budgets locaux,
   en plus de toute la suite Linux avant une poussée.
+- Les fiches d'échec restent privées : récupération via `fetch` et manifeste
+  SHA256, huit fiches dérivées bornées, extrait de journal de 4 Kio avec masquage
+  des formats de secrets connus. Ne publier ni journal ni motif brut dans le
+  statut et ne pas effacer les reçus/résultats originaux lors de leur rotation.
+  Garder le fond PNG partagé des cadrans à ratio fixe ; seule l'aiguille varie.
 - Le mode équipe utilise des workers, accès SSH, espaces et quotas ext4 distincts.
   L'identité est fixée par la passerelle ; une étiquette d'agent n'autorise jamais
   l'accès d'un autre développeur. Les outils `admin_settings_*` nécessitent une

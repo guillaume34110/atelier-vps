@@ -9,6 +9,10 @@ resources, ivory labels, orange for pressure/errors, a small tricolor accent.
 Native system type and tabular figures keep real metrics readable. The image in
 `docs/assets/widget-concept.png` is a design reference, never a telemetry source.
 Preserve the existing ivory analog dials, orange needles and their rounded cards.
+Use `macos/assets/meter-face.png` for both faces: 640×360 pixels, 55,518 bytes,
+lossless PNG, displayed at a fixed 16:9 aspect ratio. Only the live needle and
+pivot overlay are drawn, in uniform 320×180 artwork coordinates. Never stretch
+either axis independently when resizing.
 The user explicitly requested no restyling of the full widget. Semantic controls, visible
 labels, native keyboard navigation and French/English strings apply to both tabs.
 
@@ -36,6 +40,12 @@ The Management tab appears only after successful authentication. Draft, verified
 preview and applied settings are distinct; edits invalidate previews, stale
 revisions fail safely, and running work blocks affected changes. No deletion.
 Host protection is 1 GiB; worker supervisors and task headroom remain accounted.
+
+Failed history entries are native buttons. Their sheet explains the reported
+cause, exit code, measured budgets and bounded log excerpt from the same
+authenticated worker. It stays private, verifies the manifest, supports text
+selection, close/Escape and explicit retry, and never changes task resources.
+Keep original receipts/results separate from the eight derived private cards.
 
 Verification: native build and model checks; real restricted SSH samples;
 real screenshots at narrow, normal, wide, short, mini and administrator sizes;

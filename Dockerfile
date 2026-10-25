@@ -1,9 +1,6 @@
-FROM alpine:3.22 AS layout
-RUN mkdir -p /rootfs/app /rootfs/usr /rootfs/bin /rootfs/sbin /rootfs/lib /rootfs/lib64 /rootfs/etc /rootfs/opt /rootfs/tmp /rootfs/var /rootfs/run /rootfs/workspace /rootfs/volume-stat
-
 FROM scratch
-COPY --from=layout /rootfs/ /
-COPY worker.py telemetry.py resources.py dependency_cache.py quota_protection.py AGENTS.md /app/
+COPY ops/rootfs/ /
+COPY worker.py telemetry.py resources.py dependency_cache.py diagnostics.py quota_protection.py AGENTS.md /app/
 COPY ops/toolchain-lock.json /app/toolchain-lock.json
 COPY ops/worker_storage_guard.py /app/storage-guard.py
 COPY ops/worker_storage_guard.py /Users/guillaumegaillard/.local/bin/storage-guard.py

@@ -13,16 +13,27 @@ def main():
     parser.add_argument('--require-telemetry', action='store_true')
     parser.add_argument('--layouts', action='store_true', help='capture narrow, standard, wide, short, mini and administrator layouts')
     parser.add_argument('--admin', action='store_true', help='verify real administrator get/preview/apply with an unchanged policy')
+    parser.add_argument('--failure', action='store_true', help='open a real failed activity and capture its authenticated explanation')
     args = parser.parse_args()
+    if args.failure and (args.layouts or args.admin):
+        parser.error('capture failure details separately from layouts and administrator changes')
     root = Path(os.environ['TASK_WORKSPACE'])
     image = root / 'widget.png'
     binary = args.app / 'Contents/MacOS/usevps'
     subprocess.run([str(binary), '--capture', str(image), '--exercise-controls', '--exit-after-capture',
-                    *(['--capture-layouts'] if args.layouts else []), *(['--exercise-admin'] if args.admin else [])], check=True, timeout=75)
+                    *(['--capture-layouts'] if args.layouts else []), *(['--exercise-admin'] if args.admin else []),
+                    *(['--capture-failure'] if args.failure else [])], check=True, timeout=75)
     result = json.loads(image.with_suffix('.json').read_text())
     assert image.read_bytes().startswith(b'\x89PNG\r\n\x1a\n')
+    if args.failure:
+        assert result['source'] == 'real restricted SSH' and result['sha256_verified'] and result['samples'] >= 2
+        assert len(result['failure_id']) == 32 and result['failure_kind']
+        assert result['window_width'] >= 320 and result['window_height'] >= 280
+        print(json.dumps({'native_failure_render': 'passed', 'image': str(image), 'kind': result['failure_kind']}), flush=True)
+        return
     assert result['source'] == 'real restricted SSH' and result['connected'] and result['samples'] >= 2
     assert result['controls_exercised'] is True
+    assert result['meter_face_pixels'] >= 1000
     assert result['automatic_breakpoints_exercised'] is True
     assert result['connected_agents'] >= len(result['status']['pool']['active'])
     assert all(':' in clock for clock in result['history_times'])
@@ -48,6 +59,8 @@ def main():
             assert item['mini'] == (item['height'] < 220)
             expected = 'mini' if item['height'] < 220 else 'compact' if item['width'] < 440 else 'standard' if item['width'] < 700 else 'wide'
             assert item['resolved_layout'] == expected
+            if not item['mini'] and not item['management'] and item['height'] >= 500:
+                assert item['meter_face_pixels'] >= 1000
     if args.admin:
         assert result['administrator_roundtrip_verified'] is True
     print(json.dumps({'native_live_render': 'passed', 'samples': result['samples'],
