@@ -18,7 +18,7 @@ def main():
     target = Path('/usr/local/lib/usevps')
     target.mkdir(parents=True, exist_ok=True)
     source = Path(__file__).resolve().parent
-    for name in ['team.py', 'team_settings.py', 'coolify_team.js', 'deploy_lock.py']:
+    for name in ['team.py', 'team_settings.py', 'coolify_team.js', 'deploy_lock.py', 'gateway.py', 'invitations.py', 'install_enrollment.py']:
         file = target / name
         shutil.copyfile(source / name, file); file.chmod(0o644); os.chown(file, 0, 0)
         if name == 'deploy_lock.py':
@@ -32,7 +32,10 @@ def main():
     sys.path.insert(0, str(target))
     import team_settings
     import json
-    print(json.dumps(team_settings.initialize(args.application, str(args.admin_key))))
+    result = team_settings.initialize(args.application, str(args.admin_key))
+    import install_enrollment
+    result.update(install_enrollment.install())
+    print(json.dumps(result))
 
 
 if __name__ == '__main__':

@@ -79,11 +79,11 @@ def connections():
     if path.is_symlink() or path.stat().st_size > 131072:
         raise ValueError('connection registry must be a bounded regular file')
     data = json.loads(path.read_text())
-    if not isinstance(data, dict) or set(data) != {'version', 'connections'} or data['version'] != 1:
+    if not isinstance(data, dict) or set(data) != {'version', 'connections'} or type(data['version']) is not int or data['version'] != 1:
         raise ValueError('invalid connection registry')
     rows = data['connections']
-    if not isinstance(rows, list) or not 1 <= len(rows) <= MAX_CONNECTIONS:
-        raise ValueError('configure one to sixteen connections')
+    if not isinstance(rows, list) or len(rows) > MAX_CONNECTIONS:
+        raise ValueError('configure at most sixteen connections')
     rows = [validate_connection(row) for row in rows]
     if len({row['id'] for row in rows}) != len(rows) or len({row['ssh_host'] for row in rows}) != len(rows):
         raise ValueError('duplicate connection ID or SSH alias')

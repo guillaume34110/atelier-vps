@@ -9,3 +9,4 @@ ops/deployment.local.json
 docker-compose.local.yaml
 .env.*
 !.env.example
+invitation-*.txt

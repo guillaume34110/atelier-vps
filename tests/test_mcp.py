@@ -14,7 +14,7 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
             async with Client(mcp_server.server) as client:
                 tools = await client.list_tools()
                 self.assertEqual({t.name for t in tools.tools}, {'vps_status', 'vps_run', 'vps_fetch', 'vps_release',
-                    'admin_settings_get', 'admin_settings_preview', 'admin_settings_apply',
+                    'admin_settings_get', 'admin_settings_preview', 'admin_settings_apply', 'admin_invitation_create',
                     'vps_server_add','vps_connect_from_clipboard'})
                 result = await client.call_tool('vps_status')
                 self.assertFalse(result.is_error)

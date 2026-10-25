@@ -1,4 +1,4 @@
-"""Public, recipient-bound connection links; private keys never leave their device."""
+"""Private one-use invitations; public keys enroll without exporting private keys."""
 import base64
 import hashlib
 import ipaddress
@@ -9,6 +9,7 @@ import re
 import select
 import shutil
 import subprocess
+import sys
 import time
 import uuid
 
@@ -68,8 +69,7 @@ def endpoint(hostname, port):
 
 
 def private_file(path, text):
-    with path.open('x') as out:
-        os.chmod(path, 0o600)
+    with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'w') as out:
         out.write(text)
 
 
@@ -100,15 +100,17 @@ def read_request(link):
     return value
 
 
-def bounded_output(argv, limit=65536, timeout=20, capture_errors=False):
+def bounded_output(argv, limit=65536, timeout=20, capture_errors=False, input=None, env=None):
     """Untrusted onboarding responses stay bounded in memory and time."""
-    with subprocess.Popen(argv, stdin=subprocess.DEVNULL,
+    with subprocess.Popen(argv, stdin=subprocess.PIPE if input is not None else subprocess.DEVNULL, env=env,
                           stdout=subprocess.DEVNULL if capture_errors else subprocess.PIPE,
                           stderr=subprocess.PIPE if capture_errors else subprocess.DEVNULL) as proc:
         end = time.monotonic() + timeout
         result = bytearray()
         stream = proc.stderr if capture_errors else proc.stdout
         try:
+            if input is not None:
+                proc.stdin.write(input); proc.stdin.close()
             while True:
                 remaining = end - time.monotonic()
                 if remaining <= 0 or not select.select([stream], [], [], remaining)[0]:
@@ -169,10 +171,7 @@ def invitation(request, member, connection_id):
     admin = connection.get('admin_ssh_host')
     if not admin:
         raise PermissionError('this server has no separately authenticated administrator alias')
-    rc, raw = vps.transport(admin, 'settings', {'action': 'get'})
-    if rc or not raw or len(raw) > 65536:
-        raise PermissionError('administrator authentication failed')
-    state = json.loads(raw)
+    state = vps.admin_request('get', connection_id)
     users = [u for u in state['policy']['users'] if u['id'] == member and u.get('enabled', True)]
     authorized = users[0].get('public_key') if len(users) == 1 else None
     if member == 'owner' and not authorized:
@@ -182,6 +181,15 @@ def invitation(request, member, connection_id):
     tenant = state['tenants'][member]
     if not tenant.get('enabled'):
         raise ValueError('member is disabled')
+    hostname, port, key = trusted_endpoint(connection)
+    payload = {'name': connection['name'], 'team': connection['team'], 'hostname': hostname, 'port': port,
+               'user': tenant['ssh_user'], 'scope': member, 'host_key': key,
+               'device_fingerprint': fingerprint(device['public_key'])}
+    return {'invitation': encode('connect', payload), 'member': member, 'grants_access': False,
+            'note': 'Only the already authorized local device key grants access; revocation stays on the server.'}
+
+
+def trusted_endpoint(connection):
     options = config.ssh_options(connection['ssh_host'])
     resolved = bounded_output(['ssh', *options, '-G', connection['ssh_host']]).decode().splitlines()
     settings = dict(line.split(' ', 1) for line in resolved if ' ' in line)
@@ -200,14 +208,10 @@ def invitation(request, member, connection_id):
     pins = re.findall(rb'Server host key: ssh-ed25519 (SHA256:[A-Za-z0-9+/]+)', debug)
     if not pins or pins[-1].decode() != fingerprint(key):
         raise ValueError('host key does not match the existing trusted SSH connection')
-    payload = {'name': connection['name'], 'team': connection['team'], 'hostname': hostname, 'port': port,
-               'user': tenant['ssh_user'], 'scope': member, 'host_key': key,
-               'device_fingerprint': fingerprint(device['public_key'])}
-    return {'invitation': encode('connect', payload), 'member': member, 'grants_access': False,
-            'note': 'Only the already authorized local device key grants access; revocation stays on the server.'}
+    return hostname, port, key
 
 
-def accept(link):
+def accept_connect(link, expected_server=None):
     value = decode(link, 'connect', {'name', 'team', 'hostname', 'port', 'user', 'scope', 'host_key', 'device_fingerprint'})
     label(value['name']); label(value['team']); endpoint(value['hostname'], value['port'])
     key = public_key(value['host_key'])
@@ -255,6 +259,8 @@ def accept(link):
         state = status(alias, ['-F', str(candidate), '-S', 'none'])
         if state.get('scope', {}).get('id', 'owner') != value['scope']:
             raise ValueError('authenticated workspace does not match the invitation')
+        if expected_server and state.get('server_id') != expected_server:
+            raise ValueError('authenticated server does not match the invitation')
         if state.get('server_id'):
             identifier = 's-' + hashlib.sha256((state['server_id'] + ':' + value['scope']).encode()).hexdigest()[:16]
             alias = 'atelier-' + identifier
@@ -281,5 +287,92 @@ def accept(link):
         if state.get('server_id'):
             profile['server_id'] = state['server_id']
         return config.save_connection(profile)
+    finally:
+        shutil.rmtree(staging)
+
+
+def create_invitation(member, connection_id, expected_revision):
+    """Return a private link to the caller's private UI or exclusive 0600 file."""
+    import vps
+    connection = config.connection(connection_id)
+    hostname, port, key = trusted_endpoint(connection)
+    value = vps.admin_request('invite', connection_id, member=member, expected_revision=expected_revision)
+    if (not re.fullmatch('avpi-[a-f0-9]{24}', value.get('principal', ''))
+            or not re.fullmatch('[A-Za-z0-9_-]{43}', value.get('password', ''))
+            or not re.fullmatch('[a-f0-9]{64}', value.get('server_id', ''))
+            or value.get('member') != member or value.get('user') != ('usevps' if member == 'owner' else 'avps-' + member)
+            or type(value.get('expires')) is not int or not time.time() < value['expires'] <= time.time() + 1900):
+        raise ValueError('invalid invitation response')
+    payload = {'name': connection['name'], 'team': connection['team'], 'hostname': hostname, 'port': port,
+               'host_key': key, **value}
+    return encode('join', payload), {'member': member, 'server': connection_id, 'expires': value['expires'], 'one_device': True}
+
+
+def deliver_invitation(member, connection_id, expected_revision, clipboard=False):
+    if clipboard and sys.platform != 'darwin':
+        raise ValueError('clipboard delivery is available in the Mac widget; use the private file on this machine')
+    if connection_id is None:
+        rows = config.active_connections()
+        if len(rows) != 1:
+            raise ValueError('select the server to administer')
+        connection_id = rows[0]['id']
+    link, result = create_invitation(member, connection_id, expected_revision)
+    if clipboard:
+        subprocess.run(['/usr/bin/pbcopy'], input=link.encode(), check=True, timeout=5)
+        return {**result, 'copied_to_clipboard': True}
+    directory = config.config_path().parent / 'invitations'
+    if directory.is_symlink():
+        raise ValueError('private invitation directory must not be a symlink')
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    directory.chmod(0o700)
+    target = directory / ('invitation-' + uuid.uuid4().hex + '.txt')
+    private_file(target, link + '\n')
+    return {**result, 'private_file': str(target)}
+
+
+def accept(link):
+    if not isinstance(link, str) or not link.startswith('atelier-vps://join#'):
+        return accept_connect(link)
+    value = decode(link, 'join', {'name', 'team', 'hostname', 'port', 'host_key', 'principal',
+                                  'password', 'expires', 'member', 'user', 'server_id'})
+    label(value['name']); label(value['team']); endpoint(value['hostname'], value['port'])
+    key = public_key(value['host_key'])
+    if (not isinstance(value['principal'], str) or not re.fullmatch('avpi-[a-f0-9]{24}', value['principal'])
+            or not isinstance(value['password'], str) or not re.fullmatch('[A-Za-z0-9_-]{43}', value['password'])
+            or not isinstance(value['server_id'], str) or not re.fullmatch('[a-f0-9]{64}', value['server_id'])
+            or not isinstance(value['member'], str) or not re.fullmatch('[a-z][a-z0-9-]{0,15}', value['member'])
+            or value['member'] in {'admin', 'root', 'usevps'}
+            or value['user'] != ('usevps' if value['member'] == 'owner' else 'avps-' + value['member'])
+            or type(value['expires']) is not int or not time.time() < value['expires'] <= time.time() + 1900):
+        raise ValueError('invalid or expired invitation')
+    device = access_request('Atelier VPS')
+    base = {k: value[k] for k in ['name', 'team', 'hostname', 'port', 'user', 'host_key']}
+    base.update(scope=value['member'], device_fingerprint=device['fingerprint'])
+    descriptor = encode('connect', base)
+    parent = config.config_path().parent
+    staging = parent / ('.enroll-' + uuid.uuid4().hex); staging.mkdir(mode=0o700)
+    try:
+        known = staging / 'known_hosts'; askpass = staging / 'askpass'
+        private_file(known, 'atelier-enroll ' + key + '\n')
+        private_file(askpass, '#!/bin/sh\nprintf "%s\\n" "$ATELIER_VPS_ENROLL_PASSWORD"\n')
+        askpass.chmod(0o700)
+        env = {**os.environ, 'SSH_ASKPASS': str(askpass), 'SSH_ASKPASS_REQUIRE': 'force',
+               'DISPLAY': 'atelier-enrollment', 'ATELIER_VPS_ENROLL_PASSWORD': value['password']}
+        argv = ['ssh', '-F', '/dev/null', '-S', 'none', '-T', '-p', str(value['port']),
+                '-l', value['principal'], '-o', 'HostName=' + value['hostname'],
+                '-o', 'UserKnownHostsFile=' + str(known), '-o', 'GlobalKnownHostsFile=/dev/null',
+                '-o', 'HostKeyAlias=atelier-enroll', '-o', 'StrictHostKeyChecking=yes', '-o', 'HostKeyAlgorithms=ssh-ed25519',
+                '-o', 'PubkeyAuthentication=no', '-o', 'PreferredAuthentications=password',
+                '-o', 'NumberOfPasswordPrompts=1', '-o', 'ConnectTimeout=5', '-o', 'LogLevel=ERROR',
+                '-o', 'ForwardAgent=no', '-o', 'ClearAllForwardings=yes', 'atelier-enroll', 'enroll']
+        try:
+            response = json.loads(bounded_output(argv, input=json.dumps({'public_key': device['public_key']}).encode() + b'\n', env=env))
+        except (RuntimeError, TimeoutError):
+            # A lost receipt can follow successful enrollment. Only the same local key can resume.
+            return accept_connect(descriptor, expected_server=value['server_id'])
+        if (response.get('enrolled') is not True or response.get('server_id') != value['server_id']
+                or response.get('member') != value['member'] or response.get('public_key') != device['public_key']):
+            raise ValueError('enrollment response does not match this device and server')
+        return accept_connect(descriptor, expected_server=value['server_id'])
     finally:
         shutil.rmtree(staging)

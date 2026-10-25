@@ -345,6 +345,9 @@ def main():
         from team_checks import verify_team_isolation
         verify_team_isolation(root, dev, remote_host if remote else None, volume, command, execute, payload, image)
         print('Separate developers: private files, hard quota, CPU cap and neighboring OOM survival passed', flush=True)
+        from enrollment_checks import verify_enrollment
+        verify_enrollment(root, command, image, remote_host if remote else None)
+        print('Real SSH enrollment: one use, host pin, preserved primary access and forced commands passed', flush=True)
         shutil.rmtree(dest)
         archive.unlink()
     finally:

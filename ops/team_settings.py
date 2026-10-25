@@ -16,11 +16,11 @@ import time
 try:
     from . import team
     from .deploy_lock import deployment_lock
-    from .gateway import server_identity
+    from .gateway import server_identity, WORKER_EXEC
 except ImportError:
     import team
     from deploy_lock import deployment_lock
-    from gateway import server_identity
+    from gateway import server_identity, WORKER_EXEC
 
 STATE = Path('/etc/atelier-vps-team.json')
 BASE = Path('/etc/usevps-gateway.json')
@@ -57,6 +57,33 @@ def quota_usage(mount):
             for row in csv.DictReader(io.StringIO(text))}
 
 
+def overview(state):
+    """Private administrator counters, sampled only on an explicit settings read."""
+    result = []
+    for name, tenant in state['tenants'].items():
+        row = {'id': name, 'connected': False, 'enabled': tenant['enabled'],
+               'ram_limit': tenant['ram_bytes'], 'disk_limit': tenant['disk_bytes']}
+        if tenant['enabled']:
+            try:
+                text = command(['docker', 'exec', '-i', '--user', '10001:10001', tenant['container'],
+                                *WORKER_EXEC, 'status'], timeout=3)
+                if len(text.encode()) > 65536:
+                    raise ValueError('counter response too large')
+                value = json.loads(text); pool = value['pool']
+                if value['ok'] is not True or value['scope']['id'] != name:
+                    raise ValueError('unexpected workspace counters')
+                counters = {'ram_used': pool['ram_accounting']['used_bytes'],
+                            'ram_reserved': pool['ram_reserved'], 'ram_available': pool['ram_available'],
+                            'cpu_reserved': pool['cpu_reserved'], 'active': pool['active_count'], 'disk_used': value['used_bytes']}
+                if any(type(v) not in (int, float) or not 0 <= v < 2**53 for v in counters.values()):
+                    raise ValueError('invalid workspace counters')
+                row.update(connected=True, **counters)
+            except (KeyError, TypeError, ValueError, OSError, subprocess.SubprocessError):
+                pass
+        result.append(row)
+    return result
+
+
 def verify_mount(base):
     values = command(['findmnt', '-n', '-o', 'UUID,OPTIONS', '--mountpoint', base['mount']]).split()
     if len(values) != 2 or values[0] != base['volume_id'] or 'prjquota' not in values[1].split(','):
@@ -83,8 +110,19 @@ def identity(user, public, admin=False, existing=False):
     authorized = ssh / 'authorized_keys'
     if authorized.is_symlink():
         raise ValueError('authorized keys must be root-owned regular files')
-    authorized.write_text('restrict,command="sudo -n ' + helper + '" ' + public + '\n')
-    authorized.chmod(0o444); os.chown(authorized, 0, 0)
+    keys = [public]
+    if not admin:
+        try:
+            from .invitations import additional_keys
+        except ImportError:
+            from invitations import additional_keys
+        keys += additional_keys(user)
+    temporary_keys = authorized.with_name('.authorized_keys.tmp')
+    if temporary_keys.is_symlink():
+        raise ValueError('temporary authorized keys must not be a symlink')
+    temporary_keys.write_text(''.join('restrict,command="sudo -n ' + helper + '" ' + key + '\n' for key in dict.fromkeys(keys)))
+    temporary_keys.chmod(0o444); os.chown(temporary_keys, 0, 0)
+    temporary_keys.replace(authorized)
     target = Path('/etc/sudoers.d/atelier-' + user)
     temporary = target.with_suffix('.tmp')
     temporary.write_text('Defaults:' + user + ' env_keep += "SSH_ORIGINAL_COMMAND"\n' + user + ' ALL=(root) NOPASSWD: ' + helper + ' ""\n')
@@ -304,14 +342,21 @@ def main():
                       'server_id': identity,
                       'owner_public_key': state['owner_public_key'],
                       'capacity': state['capacity'], 'tenants': state['tenants'],
+                      'overview': overview(state),
                       'pending': read(PENDING) if PENDING.exists() else None,
                       'host_ram_reserve_bytes': team.GIB, 'allocatable_ram_bytes': allocatable_ram(state)}
         elif request['action'] == 'preview':
             result = preview(state, request['policy'])
         elif request['action'] == 'apply':
             result = apply(state, request['policy'], request['expected_revision'])
+        elif request['action'] == 'invite':
+            try:
+                from .invitations import issue
+            except ImportError:
+                from invitations import issue
+            result = issue(state, request['member'], request['expected_revision'])
         else:
-            raise ValueError('settings action must be get, preview or apply')
+            raise ValueError('settings action must be get, preview, apply or invite')
         print(json.dumps(result))
 
 

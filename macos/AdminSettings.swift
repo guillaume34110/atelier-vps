@@ -53,6 +53,19 @@ struct AdminPolicy: Codable, Equatable {
     }
 }
 
+struct AdminMemberMetrics: Decodable, Identifiable {
+    let id: String
+    let connected: Bool
+    let enabled: Bool
+    let ram_limit: Double
+    let disk_limit: Double
+    let ram_used: Double?
+    let ram_reserved: Double?
+    let cpu_reserved: Double?
+    let active: Int?
+    let disk_used: Double?
+}
+
 struct AdminState: Decodable {
     struct Pending: Decodable { let policy: AdminPolicy? }
     let revision: String
@@ -61,14 +74,26 @@ struct AdminState: Decodable {
     let pending: Pending?
     let host_ram_reserve_bytes: Int?
     let allocatable_ram_bytes: Int?
+    let server_id: String?
+    let overview: [AdminMemberMetrics]?
 
     static func decode(_ data: Data) throws -> AdminState {
         guard data.count <= 65536 else { throw MonitorError.invalidData }
         let state = try JSONDecoder().decode(Self.self, from: data)
         guard validRevision(state.revision), state.capacity.valid,
               state.host_ram_reserve_bytes.map({ $0 >= 0 }) ?? true,
-              state.allocatable_ram_bytes.map({ $0 >= 0 }) ?? true else { throw MonitorError.invalidData }
+              state.allocatable_ram_bytes.map({ $0 >= 0 }) ?? true,
+              state.server_id.map(validRevision) ?? true else { throw MonitorError.invalidData }
         try state.policy.validate(); try state.pending?.policy?.validate()
+        if let metrics = state.overview {
+            guard metrics.count <= 4, Set(metrics.map(\.id)).count == metrics.count else { throw MonitorError.invalidData }
+            for item in metrics {
+                guard state.policy.users.contains(where: { $0.id == item.id }),
+                      [item.ram_limit, item.disk_limit, item.ram_used ?? 0, item.ram_reserved ?? 0,
+                       item.cpu_reserved ?? 0, item.disk_used ?? 0].allSatisfy({ $0.isFinite && $0 >= 0 }),
+                      (0...4).contains(item.active ?? 0) else { throw MonitorError.invalidData }
+            }
+        }
         return state
     }
 }
@@ -97,6 +122,7 @@ private struct AdminRequest: Encodable {
     let action: String
     var policy: AdminPolicy? = nil
     var expected_revision: String? = nil
+    var expected_server_id: String? = nil
 }
 
 private struct AdminFailure: LocalizedError {
@@ -117,7 +143,10 @@ final class Administration: ObservableObject {
     var onUpdate: (() -> Void)?
     var authorized: Bool { state != nil }
     var canApply: Bool { !busy && plan?.policy == draft && plan?.revision == state?.revision }
-    private let host: String?
+    private var host: String?
+    private(set) var connectionID: String?
+    private var expectedServerID: String?
+    private let invitationEditor = ConnectionEditor()
 
     init(host: String?) {
         self.host = host.flatMap { value in
@@ -125,11 +154,23 @@ final class Administration: ObservableObject {
         }
     }
 
+    @discardableResult func configure(_ connection: ServerConnection?) -> Bool {
+        guard !busy else { return false }
+        let target = connection.flatMap { $0.valid ? $0 : nil }
+        guard connectionID != target?.id || host != target?.admin_ssh_host || expectedServerID != target?.server_id else { return false }
+        connectionID = target?.id; host = target?.admin_ssh_host
+        expectedServerID = target?.server_id
+        state = nil; plan = nil; error = nil; notice = nil; showingManagement = false
+        return true
+    }
+
     func load() {
         guard host != nil else { return }
         perform(AdminRequest(action: "get")) { [weak self] data in
             guard let self = self else { return }
             let next = try AdminState.decode(data)
+            guard self.expectedServerID == next.server_id else { throw MonitorError.invalidData }
+            if let identity = next.server_id { self.expectedServerID = identity }
             self.state = next; self.draft = next.pending?.policy ?? next.policy; self.plan = nil
             if next.pending != nil { self.notice = L("An unfinished update must be resumed with the same settings.") }
         }
@@ -141,12 +182,46 @@ final class Administration: ObservableObject {
         plan = nil
     }
 
+    func addMember() {
+        guard !busy, let state = state, draft.users.count < 4,
+              draft.users.filter(\.active).count < draft.pool.slots else { return }
+        draft.selectMode("allocated", capacity: state.capacity, allocatableRAM: state.allocatable_ram_bytes)
+        var number = draft.users.count
+        while draft.users.contains(where: { $0.id == "member-\(number)" }) { number += 1 }
+        // This random public placeholder has no corresponding private key; access starts with an invitation.
+        let bytes = [UInt8]([0, 0, 0, 11]) + Array("ssh-ed25519".utf8) + [0, 0, 0, 32] + (0..<32).map { _ in UInt8.random(in: 0...255) }
+        draft.users.append(AdminUser(id: "member-\(number)", enabled: true,
+            public_key: "ssh-ed25519 " + Data(bytes).base64EncodedString(), cpu_percent: 1, ram_percent: 1, disk_percent: 1, slots: 1))
+        let active = draft.users.indices.filter { draft.users[$0].active }
+        let disk = 100 - draft.users.filter { !$0.active }.reduce(0) { $0 + $1.disk_percent }
+        let share = floor(10000 / Double(active.count)) / 100
+        for index in active {
+            draft.users[index].cpu_percent = share; draft.users[index].ram_percent = share
+            draft.users[index].disk_percent = floor(disk * 100 / Double(active.count)) / 100
+            let cpuSlots = max(1, Int(ceil(draft.pool.cpus * share / 100)))
+            draft.users[index].slots = min(cpuSlots, max(1, draft.pool.slots / active.count))
+        }
+        plan = nil; notice = L("Adjust the shares, preview and apply, then copy the member’s invitation.")
+    }
+
+    func copyInvitation(member: String) {
+        guard !busy, let id = connectionID, let state = state, draft == state.policy,
+              state.pending == nil, state.policy.users.contains(where: { $0.id == member && $0.active }) else { return }
+        busy = true; error = nil
+        invitationEditor.save(arguments: ["--server", id, "invitations", "create", "--member", member,
+            "--expected-revision", state.revision, "--clipboard"], failed: { [weak self] message in
+                self?.busy = false; self?.error = message
+            }, completion: { [weak self] in
+                self?.busy = false; self?.notice = L("Invitation copied. Valid for 30 minutes and one device. Share it privately.")
+            })
+    }
+
     func preview() {
         guard let state = state else { return }
         let candidate = draft
         do { try candidate.validate() }
         catch { self.error = L("Check member IDs, percentages and pool values."); return }
-        perform(AdminRequest(action: "preview", policy: candidate)) { [weak self] data in
+        perform(AdminRequest(action: "preview", policy: candidate, expected_server_id: expectedServerID)) { [weak self] data in
             guard let self = self, self.draft == candidate else { return }
             self.plan = try AdminPreview.decode(data, policy: candidate, revision: state.revision)
         }
@@ -155,7 +230,7 @@ final class Administration: ObservableObject {
     func apply() {
         guard canApply, let plan = plan else { return }
         applying = true
-        perform(AdminRequest(action: "apply", policy: draft, expected_revision: plan.revision)) { [weak self] data in
+        perform(AdminRequest(action: "apply", policy: draft, expected_revision: plan.revision, expected_server_id: expectedServerID)) { [weak self] data in
             struct Applied: Decodable { let applied: Bool; let revision: String }
             let result = try JSONDecoder().decode(Applied.self, from: data)
             guard result.applied, result.revision == plan.candidate_revision else { throw MonitorError.invalidData }
@@ -248,5 +323,20 @@ func runAdminChecks() throws {
             revision: String(repeating: "b", count: 64))
         preconditionFailure("accepted stale preview")
     } catch MonitorError.invalidData { }
+    admin.state = state; admin.draft = state.policy
+    let retainedDisk = admin.draft.users[1].disk_percent
+    admin.addMember()
+    try admin.draft.validate()
+    precondition(admin.draft.mode == "allocated" && admin.draft.users.count == 3)
+    precondition(admin.draft.users[1].disk_percent == retainedDisk && !admin.draft.users[1].active)
+    precondition(admin.draft.users.filter(\.active).reduce(0) { $0 + $1.cpu_percent } <= 100)
+    let placeholder = admin.draft.users.last!.public_key!.split(separator: " ").last!
+    precondition(Data(base64Encoded: String(placeholder))?.count == 51)
+    precondition(admin.configure(ServerConnection(id: "paris", name: "Paris", team: "Paris", ssh_host: "paris-worker", admin_ssh_host: "paris-admin")))
+    precondition(!admin.authorized && !admin.canApply)
+    admin.state = state
+    var invalidTarget = ServerConnection(id: "lyon", name: "Lyon", team: "Lyon", ssh_host: "lyon-worker")
+    invalidTarget.admin_ssh_host = "-oProxyCommand=invalid"
+    precondition(admin.configure(invalidTarget) && !admin.authorized && admin.connectionID == nil)
     print("Mac administrator: solo/team transitions, retained disk, RAM rounding, identity and response bounds passed")
 }

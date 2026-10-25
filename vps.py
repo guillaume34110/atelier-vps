@@ -324,10 +324,13 @@ def admin_request(action, server=None, **request):
         raise PermissionError('update the server gateway to verify administrator targeting')
     expected={'expected_server_id':identity} if identity else {}
     rc, current=json_request(alias,'settings',{'action':'get',**expected})
-    if rc or identity and current.get('server_id')!=identity:
+    if rc or current.get('server_id') != identity:
         raise PermissionError('administrator authentication or server identity mismatch')
     if action=='get':return current
-    return json_request(alias,'settings',{'action':action,**expected,**request},timeout=120)[1]
+    rc, result = json_request(alias,'settings',{'action':action,**expected,**request},timeout=120)
+    if rc:
+        raise RuntimeError('administrator request refused; reload settings and check active work')
+    return result
 
 
 def unpack_result(archive, destination):
@@ -384,6 +387,11 @@ def main():
     servers.add_argument('--admin-host')
     connect = commands.add_parser('connect', help='accept a private invitation from standard input')
     connect.add_argument('--stdin', action='store_true', required=True)
+    invites = commands.add_parser('invitations', help='create a private one-device invitation for an applied member')
+    invites.add_argument('operation', choices=['create'])
+    invites.add_argument('--member', required=True)
+    invites.add_argument('--expected-revision', required=True)
+    invites.add_argument('--clipboard', action='store_true', help='copy the private link instead of saving a private file')
     request_access = commands.add_parser('access-request', help='prepare a public device request for an existing operator')
     request_access.add_argument('--name', required=True)
     settings = commands.add_parser('settings', help='restricted administrator settings; separate SSH identity required')
@@ -408,6 +416,10 @@ def main():
     args = parser.parse_args()
     if args.host and args.server:
         parser.error('choose --host or --server')
+    if args.action == 'invitations':
+        import onboarding
+        result = onboarding.deliver_invitation(args.member, args.server, args.expected_revision, clipboard=args.clipboard)
+        print(json.dumps(result)); return 0
     if args.action in {'servers','connect','access-request'}:
         import onboarding
         if args.action == 'connect':

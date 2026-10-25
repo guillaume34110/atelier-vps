@@ -10,6 +10,8 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+import client_config
 
 
 def codex_binary():
@@ -44,21 +46,32 @@ def timeout_setting(path):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--host', default='dev-vps', help='existing restricted SSH alias')
+    parser.add_argument('--host', help='existing restricted SSH alias; omit when joining with an invitation')
     parser.add_argument('--coolify-url', default='', help='optional personal dashboard URL')
     args = parser.parse_args()
-    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}', args.host):
+    if args.host is not None and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}', args.host):
         parser.error('use a configured SSH alias')
     config = Path.home() / '.config/atelier-vps/config.json'
-    config.parent.mkdir(parents=True, exist_ok=True)
+    if config.is_symlink() or config.parent.is_symlink():
+        raise ValueError('personal configuration must not be a symlink')
+    config.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     value = json.loads(config.read_text()) if config.exists() else {}
-    value.update(ssh_host=args.host)
+    if args.host:
+        value.update(ssh_host=args.host)
     if args.coolify_url:
         if not args.coolify_url.startswith('https://'):
             parser.error('dashboard URL must use HTTPS')
         value['coolify_url'] = args.coolify_url
     config.write_text(json.dumps(value, indent=2) + '\n')
     config.chmod(0o600)
+    registry = config.with_name('connections.json')
+    if not value.get('ssh_host') and not registry.exists():
+        with os.fdopen(os.open(registry, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'w') as output:
+            json.dump({'version': 1, 'connections': []}, output)
+    elif args.host and registry.exists() and not client_config.connections():
+        client_config.save_connection({'id': 'default', 'name': value.get('server_name', 'Atelier VPS'),
+            'team': value.get('team_name', 'Personnel'), 'ssh_host': args.host,
+            **({'admin_ssh_host': value['admin_ssh_host']} if value.get('admin_ssh_host') else {})})
     binary = Path.home() / '.local/bin/atelier-vps'
     binary.parent.mkdir(parents=True, exist_ok=True)
     if binary.is_symlink():

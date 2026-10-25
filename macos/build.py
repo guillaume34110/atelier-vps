@@ -27,7 +27,7 @@ def main():
     binary = bundle / 'Contents/MacOS/usevps'
     binary.parent.mkdir(parents=True)
     (bundle / 'Contents/Resources').mkdir()
-    sources = [source / name for name in ['WidgetModel.swift', 'AdminSettings.swift', 'AdminView.swift', 'FailureDetails.swift', 'WidgetApp.swift']]
+    sources = [source / name for name in ['WidgetModel.swift', 'FleetModel.swift', 'FleetView.swift', 'AdminSettings.swift', 'AdminView.swift', 'FailureDetails.swift', 'WidgetApp.swift']]
     translations = sorted(source.glob('*.lproj/*.strings'))
     assets = [source / 'assets/meter-face.png']
     for asset in assets:

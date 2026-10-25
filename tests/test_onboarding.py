@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -80,20 +81,50 @@ class Onboarding(unittest.TestCase):
         config.save_connection(row)
         state={'policy':{'users':[{'id':'camille','public_key':self.device['public_key']}]},
                'tenants':{'camille':{'enabled':True,'ssh_user':'avps-camille'}},'pending':None}
-        reply=(0,json.dumps(state).encode())
         resolved=b'hostname vps.example.test\nport 22\nproxyjump none\nproxycommand none\n'
         scan=('vps.example.test '+self.device['public_key']+'\n').encode()
         debug=('debug1: Server host key: ssh-ed25519 '+self.device['fingerprint']+'\n').encode()
-        with patch('vps.transport',return_value=reply), patch.object(join,'bounded_output',side_effect=[resolved,scan,debug]):
+        with patch('vps.admin_request',return_value=state) as admin, patch.object(join,'bounded_output',side_effect=[resolved,scan,debug]):
             result=join.invitation(self.device['request'],'camille','paris')
+        admin.assert_called_once_with('get', 'paris')
         self.assertFalse(result['grants_access'])
         self.assertEqual(join.decode(result['invitation'],'connect',self.payload.keys())['scope'],'camille')
-        with patch('vps.transport',return_value=reply), patch.object(join,'bounded_output',side_effect=[resolved,scan,b'debug1: wrong key']):
+        with patch('vps.admin_request',return_value=state), patch.object(join,'bounded_output',side_effect=[resolved,scan,b'debug1: wrong key']):
             with self.assertRaises(ValueError):join.invitation(self.device['request'],'camille','paris')
         state['pending']={'affected':['camille']}
-        with patch('vps.transport',return_value=(0,json.dumps(state).encode())), patch.object(join,'bounded_output') as ssh:
+        with patch('vps.admin_request',return_value=state), patch.object(join,'bounded_output') as ssh:
             with self.assertRaises(ValueError):join.invitation(self.device['request'],'camille','paris')
         ssh.assert_not_called()
+
+    def join_payload(self):
+        return {'name':'Paris', 'team':'Équipe Paris', 'hostname':'vps.example.test', 'port':22,
+                'host_key':self.device['public_key'], 'principal':'avpi-'+'a'*24,
+                'password':'z'*43, 'expires':int(time.time())+1800,
+                'member':'camille', 'user':'avps-camille', 'server_id':'a'*64}
+
+    def test_one_paste_enrolls_only_public_material_with_a_pinned_host(self):
+        payload=self.join_payload()
+        receipt={'enrolled':True,'member':'camille','server_id':'a'*64,'public_key':self.device['public_key']}
+        with patch.object(join,'bounded_output',return_value=json.dumps(receipt).encode()) as ssh, patch.object(join,'accept_connect',return_value={'connected':True}) as accept:
+            self.assertTrue(join.accept(join.encode('join',payload))['connected'])
+        command=ssh.call_args.args[0]
+        self.assertNotIn(payload['password'], ' '.join(command))
+        self.assertIn('StrictHostKeyChecking=yes',command)
+        self.assertIn('ClearAllForwardings=yes',command)
+        self.assertEqual(json.loads(ssh.call_args.kwargs['input']),{'public_key':self.device['public_key']})
+        accept.assert_called_once()
+        self.assertEqual(accept.call_args.kwargs,{'expected_server':'a'*64})
+        self.assertFalse(list(self.root.glob('.enroll-*')))
+
+    def test_one_use_link_validates_before_network_and_resumes_lost_receipt(self):
+        payload=self.join_payload()
+        for change in [{'expires':1},{'user':'root'},{'member':'admin'},{'password':42},{'server_id':'invalid'}]:
+            with self.subTest(change=change), patch.object(join,'bounded_output') as ssh, self.assertRaises(ValueError):
+                join.accept(join.encode('join',{**payload,**change}))
+            ssh.assert_not_called()
+        with patch.object(join,'bounded_output',side_effect=RuntimeError('lost receipt')), patch.object(join,'accept_connect',return_value={'resumed':True}) as accept:
+            self.assertTrue(join.accept(join.encode('join',payload))['resumed'])
+        self.assertEqual(accept.call_args.kwargs['expected_server'],'a'*64)
 
     def test_onboarding_transport_enforces_real_output_and_time_bounds(self):
         self.assertEqual(join.bounded_output([sys.executable,'-c',"print('ok')"]),b'ok\n')

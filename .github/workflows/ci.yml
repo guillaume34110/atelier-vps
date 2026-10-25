@@ -27,7 +27,7 @@ jobs:
       - name: Install ext4 quota tools for real developer isolation tests
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends quota
+          sudo apt-get install -y --no-install-recommends quota openssh-server
           if ! modinfo quota_v2 > /dev/null 2>&1; then
             sudo apt-get install -y --no-install-recommends "linux-modules-extra-$(uname -r)"
           fi

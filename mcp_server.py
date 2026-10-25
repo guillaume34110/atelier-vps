@@ -144,6 +144,18 @@ def settings_response(action, server=None, **request):
 
 
 @server.tool(structured_output=True)
+def admin_invitation_create(member: str, expected_revision: str, server: str | None = None) -> dict[str, Any]:
+    """Administrator only: create a 30-minute, one-device link for an applied member.
+
+    The secret link is saved in a private local 0600 file; only its path and
+    expiration are returned. Do not read or paste that link into the chat.
+    The joining device generates its key locally. Existing access and tasks remain intact.
+    """
+    import onboarding
+    return onboarding.deliver_invitation(member,server,expected_revision)
+
+
+@server.tool(structured_output=True)
 def admin_settings_get(server: str | None = None) -> dict[str, Any]:
     """Administrator only: inspect modes, per-developer quotas and settings revision.
 

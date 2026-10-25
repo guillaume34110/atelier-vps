@@ -14,6 +14,21 @@ struct AdminView: View {
                 }
                 Text(L("Applied mode: ") + L(admin.state?.policy.mode == "allocated" ? "Team" : "Solo"))
                     .font(.system(size: 11)).foregroundColor(Paint.muted)
+                if let metrics = admin.state?.overview {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(L("Team activity · refresh to update")).fontWeight(.semibold)
+                        ForEach(metrics) { item in
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(item.id).foregroundColor(Paint.ivory)
+                                if item.connected {
+                                    Text(LF("RAM %@ / %@ %@ reserved · %d tasks", gib(item.ram_used), gib(item.ram_reserved), L("GiB"), item.active ?? 0))
+                                    Text(LF("Storage %@ / %@ %@", gib(item.disk_used), gib(item.disk_limit), L("GiB"))).foregroundColor(Paint.muted)
+                                    Text(LF("CPU reserved %.0f vCPU · RAM limit %@ %@", item.cpu_reserved ?? 0, gib(item.ram_limit), L("GiB"))).foregroundColor(Paint.muted)
+                                } else { Text(L(item.enabled ? "Offline" : "Disabled")).foregroundColor(Paint.muted) }
+                            }
+                        }
+                    }.font(.system(size: 11)).padding(12).background(card)
+                }
                 Picker(L("Mode"), selection: Binding(get: { admin.draft.mode }, set: { admin.selectMode($0) })) {
                     Text(L("Solo")).tag("opportunistic")
                     Text(L("Team")).tag("allocated")
@@ -41,6 +56,9 @@ struct AdminView: View {
 
                 HStack {
                     Text(L("Team members")).font(.system(size: 13, weight: .semibold))
+                    Button { admin.addMember() } label: { Image(systemName: "person.badge.plus") }
+                        .help(L("Add a member")).accessibilityLabel(L("Add a member"))
+                        .disabled(admin.draft.users.count >= 4 || admin.draft.users.filter(\.active).count >= admin.draft.pool.slots)
                     Spacer(minLength: 4)
                     Text(L(admin.draft == admin.state?.policy ? "Applied" : "Draft"))
                         .font(.system(size: 10)).foregroundColor(Paint.green)
@@ -136,10 +154,14 @@ struct AdminView: View {
                     .disabled(admin.draft.mode == "opportunistic")
             }
             if binding.wrappedValue.id != "owner" {
-                TextField(L("SSH public key (ssh-ed25519…)"), text: Binding(get: { binding.wrappedValue.public_key ?? "" }, set: { binding.wrappedValue.public_key = $0 }))
-                    .textFieldStyle(.roundedBorder).font(.system(size: 10, design: .monospaced))
-                    .accessibilityLabel(L("SSH public key (ssh-ed25519…)"))
+                DisclosureGroup(L("Advanced access")) {
+                    TextField(L("SSH public key (ssh-ed25519…)"), text: Binding(get: { binding.wrappedValue.public_key ?? "" }, set: { binding.wrappedValue.public_key = $0 }))
+                        .textFieldStyle(.roundedBorder).font(.system(size: 10, design: .monospaced))
+                        .accessibilityLabel(L("SSH public key (ssh-ed25519…)"))
+                }
             }
+            Button(L("Copy invitation")) { admin.copyInvitation(member: binding.wrappedValue.id) }
+                .disabled(!existing || !binding.wrappedValue.active || admin.draft != admin.state?.policy || admin.state?.pending != nil)
         }.font(.system(size: 11)).padding(12).background(card)
     }
 
