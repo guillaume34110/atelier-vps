@@ -145,27 +145,33 @@ private struct GaugeFace: View, Animatable {
     var body: some View {
         Image(nsImage: Self.artwork).resizable().interpolation(.high)
             .aspectRatio(16.0 / 9.0, contentMode: .fit)
-            .overlay { Canvas { context, size in
+            .overlay(needle)
+            .opacity(known ? 1 : 0.55)
+    }
+
+    private var needle: some View {
+        Canvas { context, size in
             // Match the fixed 320×180 artwork; never scale its axes independently.
             let scale = size.width / 320
             let pivot = CGPoint(x: 160 * scale, y: 168 * scale)
             let radius = 147.2 * scale
             if known {
-                let angle = (200 + 140 * max(0, min(1, level))) * .pi / 180
+                let angle: Double = (200 + 140 * max(0, min(1, level))) * .pi / 180
+                let tip = CGPoint(x: pivot.x + CGFloat(cos(angle)) * radius * 0.86,
+                                  y: pivot.y + CGFloat(sin(angle)) * radius * 0.86)
                 var needle = Path()
                 needle.move(to: pivot)
-                needle.addLine(to: CGPoint(x: pivot.x + cos(angle) * radius * 0.86,
-                                          y: pivot.y + sin(angle) * radius * 0.86))
+                needle.addLine(to: tip)
                 var shadow = context
                 shadow.addFilter(.shadow(color: .black.opacity(0.5), radius: 1.5 * scale, x: scale, y: 2 * scale))
                 shadow.stroke(needle, with: .color(Paint.orange), style: StrokeStyle(lineWidth: 2.7 * scale, lineCap: .round))
             }
             let cap = Path(ellipseIn: CGRect(x: pivot.x - 7 * scale, y: pivot.y - 7 * scale, width: 14 * scale, height: 14 * scale))
-            context.fill(cap, with: .linearGradient(Gradient(colors: [.gray, .black]), startPoint: pivot,
-                                                  endPoint: CGPoint(x: pivot.x + 7 * scale, y: pivot.y + 7 * scale)))
+            let gradient = Gradient(colors: [Color.gray, Color.black])
+            let capEnd = CGPoint(x: pivot.x + 7 * scale, y: pivot.y + 7 * scale)
+            context.fill(cap, with: .linearGradient(gradient, startPoint: pivot, endPoint: capEnd))
             context.stroke(cap, with: .color(.black.opacity(0.8)), lineWidth: 1.2 * scale)
-        } }
-        .opacity(known ? 1 : 0.55)
+        }
     }
 }
 
