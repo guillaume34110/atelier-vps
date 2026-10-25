@@ -27,11 +27,16 @@ def main():
     binary = bundle / 'Contents/MacOS/usevps'
     binary.parent.mkdir(parents=True)
     (bundle / 'Contents/Resources').mkdir()
-    sources = [source / name for name in ['WidgetModel.swift', 'AdminSettings.swift', 'AdminView.swift', 'WidgetApp.swift']]
+    sources = [source / name for name in ['WidgetModel.swift', 'AdminSettings.swift', 'AdminView.swift', 'FailureDetails.swift', 'WidgetApp.swift']]
     translations = sorted(source.glob('*.lproj/*.strings'))
+    assets = [source / 'assets/meter-face.png']
+    for asset in assets:
+        if not asset.is_file() or asset.stat().st_size > 65536:
+            raise RuntimeError('missing or oversized meter artwork')
+        shutil.copy2(asset, bundle / 'Contents/Resources' / asset.name)
     for locale in ['en', 'fr']:
         shutil.copytree(source / (locale + '.lproj'), bundle / 'Contents/Resources' / (locale + '.lproj'))
-    digest = hashlib.sha256(b''.join(p.relative_to(source).as_posix().encode() + b'\0' + p.read_bytes() for p in sources + [Path(__file__).resolve()] + translations)).hexdigest()
+    digest = hashlib.sha256(b''.join(p.relative_to(source).as_posix().encode() + b'\0' + p.read_bytes() for p in sources + [Path(__file__).resolve()] + translations + assets)).hexdigest()
     info = {'CFBundleIdentifier': 'eu.progsoft.usevps.widget', 'CFBundleName': 'usevps',
             'CFBundleDisplayName': 'usevps', 'CFBundleExecutable': 'usevps',
             'CFBundlePackageType': 'APPL', 'CFBundleVersion': '1',

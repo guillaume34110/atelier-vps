@@ -20,6 +20,7 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from telemetry import process_token, public_label, record_activity, snapshot, Transfer
 import dependency_cache
+import diagnostics
 import resources
 from quota_protection import protect_quota
 
@@ -138,7 +139,7 @@ def status():
     maintenance = maintenance or os.environ.get('USEVPS_MAINTENANCE') == '1'
     state.update(pool=pool, busy=bool(pool['active_count']) or maintenance, maintenance=maintenance,
                  admit=not maintenance and resources.fits(pool, 1, 64 * MIB, MIB),
-                 capabilities={'ram_profiles': True, 'quota_attributes_protected': True},
+                 capabilities={'ram_profiles': True, 'quota_attributes_protected': True, 'failure_details': True},
                  scope={'id': os.environ.get('USEVPS_TENANT', 'owner'),
                         'mode': os.environ.get('USEVPS_MODE', 'opportunistic')})
     return state
@@ -234,6 +235,7 @@ def receipt(path, data):
         tmp.write_text(json.dumps(data))
     tmp.replace(path / "receipt.json")
     record_activity(ROOT, data)
+    diagnostics.remember(ROOT, path, data)
 
 
 def descendants():
@@ -308,7 +310,7 @@ def run_job(request, stream):
         path = ROOT / "jobs" / ident
         work = path / "work"
         work.mkdir(parents=True)
-        result = {"id": path.name, "status": "running", "argv": argv, "started": time.time(),
+        result = {"id": path.name, "status": "running", "argv": argv, "timeout": timeout, "started": time.time(),
                   "agent": agent, "project": project, "runner": process_token(os.getpid()),
                   "reservation": {k: lease.value[k] for k in ('cpus', 'ram_bytes', 'disk_bytes', 'ram_source')}}
         receipt(path, result)
@@ -419,6 +421,13 @@ def run_job(request, stream):
 
 def fetch(request, stream):
     path = job_path(request["id"])
+    if 'diagnostic.json' in request.get('paths', []) and request['paths'] != ['diagnostic.json']:
+        raise ValueError('fetch failure details separately from job files')
+    if request.get('paths') == ['diagnostic.json']:
+        report = diagnostics.get(ROOT, path)
+        with Transfer(ROOT, stream, 'download', path.name, report['agent'], report['project']) as transfer:
+            transfer.write(diagnostics.bundle(report))
+        return
     state = json.loads((path / "receipt.json").read_text())
     if state["status"] == "running":
         raise ValueError("job still running")

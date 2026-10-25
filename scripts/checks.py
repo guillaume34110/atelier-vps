@@ -240,7 +240,27 @@ def main():
         execute(name, "release", json.dumps({"id": orphan["id"]}).encode() + b"\n")
         failed = json.loads(execute(name, "run", payload(["python3", "-c", "import time; time.sleep(5)"], timeout=1), success=False))
         assert failed["status"] == "failed" and failed["reason"] == "timeout", failed
+        detail_tar = execute(name, 'fetch', json.dumps({'id': failed['id'], 'paths': ['diagnostic.json']}).encode() + b'\n')
+        with tarfile.open(fileobj=io.BytesIO(detail_tar)) as details:
+            timeout_card = json.load(details.extractfile('diagnostic.json'))
+        assert timeout_card['kind'] == 'timeout' and timeout_card['resources']['timeout_seconds'] == 1, timeout_card
         execute(name, "release", json.dumps({"id": failed["id"]}).encode() + b"\n")
+        failed = json.loads(execute(name, 'run', payload(['python3', '-c',
+            "print('AssertionError: expected 42'); print('TOKEN=private-fixture-value'); raise SystemExit(7)"],
+            agent='CI · détails privés', project='usevps', ram_bytes=128 * 1024**2), success=False))
+        execute(name, 'release', json.dumps({'id': failed['id']}).encode() + b'\n')
+        detail_tar = execute(name, 'fetch', json.dumps({'id': failed['id'], 'paths': ['diagnostic.json']}).encode() + b'\n')
+        detail_path = root / 'failure-details.tar'; detail_path.write_bytes(detail_tar)
+        detail_dir = root / 'failure-details'
+        assert vps.unpack_result(detail_path, detail_dir) == 1
+        card = json.loads((detail_dir / 'diagnostic.json').read_text())
+        assert card['kind'] == 'command' and card['returncode'] == 7 and 'expected 42' in card['log_tail'], card
+        assert 'private-fixture-value' not in card['log_tail'], card
+        public = execute(name, 'status')
+        assert b'AssertionError' not in public and b'private-fixture-value' not in public
+        (evidence / 'failure-details-proof.json').write_text(json.dumps(card))
+        detail_path.unlink(); shutil.rmtree(detail_dir)
+        print('Private failure details: classified, bounded, redacted, SHA256 verified and retained after release', flush=True)
         failed = json.loads(execute(name, "run", payload(["python3", "-c", "import sys; sys.stdout.write('x'*22*1024*1024)"], disk_bytes=64 * 1024 ** 2), success=False))
         assert failed["status"] == "failed" and failed["reason"] == "log limit", failed
         command(["docker", "exec", name, "python3", "-c", "from pathlib import Path; assert Path('/workspace/jobs/" + failed["id"] + "/stdout.log').stat().st_size <= 20*1024**2"])

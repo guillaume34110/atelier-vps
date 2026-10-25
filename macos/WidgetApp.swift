@@ -130,56 +130,41 @@ final class Monitor: ObservableObject {
 }
 
 private struct GaugeFace: View, Animatable {
+    private static let artwork: NSImage = {
+        let image = NSImage(contentsOf: Bundle.main.url(forResource: "meter-face", withExtension: "png")!)!
+        image.isTemplate = false
+        return image
+    }()
     var level: Double
     var known: Bool
-    var danger: Double
     var animatableData: Double {
         get { level }
         set { level = newValue }
     }
 
     var body: some View {
-        Canvas { context, size in
-            let pivot = CGPoint(x: size.width / 2, y: size.height - 12)
-            let radius = min(size.width * 0.46, size.height * 0.86)
-            func point(_ fraction: Double, _ scale: Double) -> CGPoint {
-                let angle = (200 + 140 * fraction) * .pi / 180
-                return CGPoint(x: pivot.x + cos(angle) * radius * scale,
-                               y: pivot.y + sin(angle) * radius * scale)
-            }
-            var face = Path()
-            face.move(to: point(0, 1.04))
-            for tick in 0...140 { face.addLine(to: point(Double(tick) / 140, 1.04)) }
-            face.addQuadCurve(to: CGPoint(x: pivot.x, y: pivot.y + 7),
-                              control: CGPoint(x: size.width - 6, y: size.height + 15))
-            face.addQuadCurve(to: point(0, 1.04), control: CGPoint(x: 6, y: size.height + 15))
-            face.closeSubpath()
-            context.fill(face, with: .linearGradient(Gradient(colors: [Paint.ivory.opacity(0.88), Color(red: 1, green: 0.95, blue: 0.80), Paint.ivory]),
-                                                     startPoint: .zero, endPoint: CGPoint(x: 0, y: size.height)))
-            context.stroke(face, with: .color(.black.opacity(0.7)), lineWidth: 3)
-            for tick in 0...50 {
-                let value = Double(tick) / 50
-                var line = Path()
-                line.move(to: point(value, tick % 5 == 0 ? 0.79 : 0.85))
-                line.addLine(to: point(value, 0.93))
-                context.stroke(line, with: .color(value >= danger ? Paint.orange : .black.opacity(0.78)), lineWidth: tick % 5 == 0 ? 1.2 : 0.65)
-                if tick % 10 == 0 {
-                    context.draw(Text("\(tick * 2)").font(.system(size: 10, weight: .semibold, design: .rounded)).foregroundColor(.black.opacity(0.8)),
-                                 at: point(value, 0.65))
-                }
-            }
+        Image(nsImage: Self.artwork).resizable().interpolation(.high)
+            .aspectRatio(16.0 / 9.0, contentMode: .fit)
+            .overlay { Canvas { context, size in
+            // Match the fixed 320×180 artwork; never scale its axes independently.
+            let scale = size.width / 320
+            let pivot = CGPoint(x: 160 * scale, y: 168 * scale)
+            let radius = 147.2 * scale
             if known {
+                let angle = (200 + 140 * max(0, min(1, level))) * .pi / 180
                 var needle = Path()
                 needle.move(to: pivot)
-                needle.addLine(to: point(max(0, min(1, level)), 0.86))
+                needle.addLine(to: CGPoint(x: pivot.x + cos(angle) * radius * 0.86,
+                                          y: pivot.y + sin(angle) * radius * 0.86))
                 var shadow = context
-                shadow.addFilter(.shadow(color: .black.opacity(0.5), radius: 1.5, x: 1, y: 2))
-                shadow.stroke(needle, with: .color(Paint.orange), style: StrokeStyle(lineWidth: 2.7, lineCap: .round))
+                shadow.addFilter(.shadow(color: .black.opacity(0.5), radius: 1.5 * scale, x: scale, y: 2 * scale))
+                shadow.stroke(needle, with: .color(Paint.orange), style: StrokeStyle(lineWidth: 2.7 * scale, lineCap: .round))
             }
-            let cap = Path(ellipseIn: CGRect(x: pivot.x - 7, y: pivot.y - 7, width: 14, height: 14))
-            context.fill(cap, with: .linearGradient(Gradient(colors: [.gray, .black]), startPoint: pivot, endPoint: CGPoint(x: pivot.x + 7, y: pivot.y + 7)))
-            context.stroke(cap, with: .color(.black.opacity(0.8)), lineWidth: 1.2)
-        }
+            let cap = Path(ellipseIn: CGRect(x: pivot.x - 7 * scale, y: pivot.y - 7 * scale, width: 14 * scale, height: 14 * scale))
+            context.fill(cap, with: .linearGradient(Gradient(colors: [.gray, .black]), startPoint: pivot,
+                                                  endPoint: CGPoint(x: pivot.x + 7 * scale, y: pivot.y + 7 * scale)))
+            context.stroke(cap, with: .color(.black.opacity(0.8)), lineWidth: 1.2 * scale)
+        } }
         .opacity(known ? 1 : 0.55)
     }
 }
@@ -189,12 +174,11 @@ private struct Dial: View {
     let value: String
     let fraction: Double?
     let detail: String
-    var danger: Double = 0.85
     var compact = false
 
     var body: some View {
         VStack(spacing: 2) {
-            GaugeFace(level: fraction ?? 0, known: fraction != nil, danger: danger)
+            GaugeFace(level: fraction ?? 0, known: fraction != nil)
                 .frame(height: compact ? 100 : 124)
                 .animation(.easeInOut(duration: 0.8), value: fraction)
             Text(title).font(.system(size: 11, weight: .bold)).tracking(1.2)
@@ -216,7 +200,7 @@ private struct Collapsible<Content: View>: View {
 
     init(_ title: String, key: String, @ViewBuilder content: () -> Content) {
         self.title = title; self.key = key; self.content = content()
-        _expanded = State(initialValue: UserDefaults.standard.object(forKey: key) as? Bool ?? true)
+        _expanded = State(initialValue: CommandLine.arguments.contains("--capture") ? true : UserDefaults.standard.object(forKey: key) as? Bool ?? true)
     }
     var body: some View {
         DisclosureGroup(isExpanded: $expanded) { content.padding(.top, 8) } label: {
@@ -232,6 +216,7 @@ private struct WidgetView: View {
     let layout: WidgetLayout
     @ObservedObject var monitor: Monitor
     @ObservedObject var admin: Administration
+    @ObservedObject var failures: FailureDetails
     let hide: () -> Void
     let menu: () -> Void
     let compact: () -> Void
@@ -321,6 +306,7 @@ private struct WidgetView: View {
         .clipShape(RoundedRectangle(cornerRadius: 18))
         .overlay(RoundedRectangle(cornerRadius: 18).stroke(.white.opacity(0.17), lineWidth: 1))
         .preferredColorScheme(.dark).environment(\.locale, Locale(identifier: UILanguage.code)).id(language)
+        .sheet(item: $failures.selected) { activity in FailureDetailView(activity: activity, details: failures) }
     }
     private var agentsSection: some View {
         Collapsible("Connected agents", key: profile + ".tasks") {
@@ -379,21 +365,29 @@ private struct WidgetView: View {
             VStack(alignment: .leading, spacing: 8) {
                 if let recent = snapshot?.recent, !recent.isEmpty {
                     ForEach(Array(recent.prefix(3))) { entry in
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack(alignment: .top, spacing: 7) {
-                                Image(systemName: entry.status == "passed" ? "checkmark.circle.fill" : "exclamationmark.circle")
-                                    .foregroundColor(entry.status == "passed" ? Paint.green : .orange)
-                                Text(entry.agent).lineLimit(layout == .standard ? 1 : 2).help(entry.agent)
-                                Spacer(minLength: 2)
-                                Text(entry.elapsed(at: Date())).monospacedDigit()
-                            }
-                            Text(entry.clockRange + " · " + L(entry.status == "passed" ? "Completed" : "Failed"))
-                                .font(.system(size: 9)).monospacedDigit().fixedSize(horizontal: false, vertical: true)
-                        }.font(.system(size: 10))
+                        if entry.status == "failed" {
+                            Button { failures.open(entry) } label: { historyRow(entry) }
+                                .buttonStyle(.plain).help(L("Show failure details"))
+                                .accessibilityIdentifier("failure-" + entry.id)
+                                .accessibilityLabel(LF("Failure details for %@", entry.agent))
+                        } else { historyRow(entry) }
                     }
                 } else { Text(L("Completed tasks appear here")).font(.system(size: 11)) }
             }.foregroundColor(Paint.muted).frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+    private func historyRow(_ entry: Activity) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .top, spacing: 7) {
+                Image(systemName: entry.status == "passed" ? "checkmark.circle.fill" : "exclamationmark.circle")
+                    .foregroundColor(entry.status == "passed" ? Paint.green : .orange)
+                Text(entry.agent).lineLimit(layout == .standard ? 1 : 2).help(entry.agent)
+                Spacer(minLength: 2)
+                Text(entry.elapsed(at: Date())).monospacedDigit()
+            }
+            Text(entry.clockRange + " · " + L(entry.status == "passed" ? "Completed" : "Failed"))
+                .font(.system(size: 9)).monospacedDigit().fixedSize(horizontal: false, vertical: true)
+        }.font(.system(size: 10)).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
     }
     private var freshness: String {
         guard let received = monitor.received else { return L(monitor.error) }
@@ -472,6 +466,7 @@ private struct MiniWidget: View {
 private struct WidgetRoot: View {
     @ObservedObject var monitor: Monitor
     @ObservedObject var admin: Administration
+    @ObservedObject var failures: FailureDetails
     let hide: () -> Void
     let menu: () -> Void
     let compact: () -> Void
@@ -482,7 +477,7 @@ private struct WidgetRoot: View {
             if layout == .mini {
                 MiniWidget(monitor: monitor, expand: compact, menu: menu)
             } else {
-                WidgetView(layout: layout, monitor: monitor, admin: admin, hide: hide, menu: menu, compact: compact)
+                WidgetView(layout: layout, monitor: monitor, admin: admin, failures: failures, hide: hide, menu: menu, compact: compact)
             }
         }
     }
@@ -496,6 +491,7 @@ private final class WidgetPanel: NSPanel {
 final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let monitor = Monitor()
     let administration = Administration(host: Configuration.adminHost)
+    let failures = FailureDetails(host: Configuration.host)
     private var panel: WidgetPanel!
     private var statusItem: NSStatusItem!
     private var capturing = false
@@ -506,7 +502,7 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
-        let root = WidgetRoot(monitor: monitor, admin: administration, hide: { [weak self] in self?.hide() },
+        let root = WidgetRoot(monitor: monitor, admin: administration, failures: failures, hide: { [weak self] in self?.hide() },
                               menu: { [weak self] in self?.showMenu() }, compact: { [weak self] in self?.toggleCompact() })
         let host = NSHostingView(rootView: root)
         // Window bounds own resizing; automatic hosting minima retain the full view in mini mode.
@@ -545,6 +541,7 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if UserDefaults.standard.bool(forKey: "atelier-mini"), !CommandLine.arguments.contains("--capture") { setCompact(true) }
         panel.orderFrontRegardless()
         monitor.onUpdate = { [weak self] in self?.captureIfReady() }
+        failures.onUpdate = { [weak self] in self?.captureIfReady() }
         administration.onUpdate = { [weak self] in self?.captureIfReady() }
         administration.onApplied = { [weak self] in self?.adminCheckApplied = true; self?.monitor.refresh() }
         monitor.refresh()
@@ -637,7 +634,7 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func windowDidMove(_ notification: Notification) {
         if !monitor.compact && !CommandLine.arguments.contains("--capture") { panel.saveFrame(usingName: "usevps-widget") }
     }
-    func applicationWillTerminate(_ notification: Notification) { monitor.stop() }
+    func applicationWillTerminate(_ notification: Notification) { monitor.stop(); failures.cancel() }
 
     @objc private func setLanguage(_ sender: NSMenuItem) {
         guard let code = sender.representedObject as? String, ["system", "fr", "en"].contains(code) else { return }
@@ -648,6 +645,10 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func captureIfReady() {
         guard !capturing, monitor.successfulSamples >= 2,
               let index = CommandLine.arguments.firstIndex(of: "--capture"), index + 1 < CommandLine.arguments.count else { return }
+        if CommandLine.arguments.contains("--capture-failure") {
+            captureFailure(index: index)
+            return
+        }
         if CommandLine.arguments.contains("--capture-layouts"), Configuration.adminHost != nil,
            administration.busy || !administration.authorized { return }
         if CommandLine.arguments.contains("--exercise-admin") {
@@ -717,11 +718,14 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                       let view = panel.contentView,
                       let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { throw MonitorError.invalidData }
                 view.cacheDisplay(in: view.bounds, to: bitmap)
+                let facePixels = meterFacePixels(bitmap)
+                guard facePixels >= 1000 else { throw MonitorError.invalidData }
                 guard let png = bitmap.representation(using: .png, properties: [:]) else { throw MonitorError.invalidData }
                 try png.write(to: path, options: .withoutOverwriting)
                 let evidence: [String: Any] = ["source": "real restricted SSH", "samples": monitor.successfulSamples,
                     "connected": monitor.connected, "cpu_fraction": monitor.cpu.worker.map { $0 as Any } ?? NSNull(),
                     "ram_fraction": monitor.document?.ramUsageFraction.map { $0 as Any } ?? NSNull(),
+                    "meter_face_pixels": facePixels,
                     "bundle": Bundle.main.bundlePath, "window_width": view.bounds.width, "window_height": view.bounds.height,
                     "controls_exercised": CommandLine.arguments.contains("--exercise-controls"),
                     "automatic_breakpoints_exercised": CommandLine.arguments.contains("--exercise-controls"),
@@ -737,6 +741,56 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 if CommandLine.arguments.contains("--capture-layouts") { captureLayouts(path) }
                 else if CommandLine.arguments.contains("--exit-after-capture") { quit() }
             } catch { fputs("Widget capture failed: \(error)\n", stderr); exit(1) }
+        }
+    }
+
+    private func meterFacePixels(_ bitmap: NSBitmapImageRep) -> Int {
+        var count = 0
+        for y in stride(from: 0, to: bitmap.pixelsHigh, by: 2) {
+            for x in stride(from: 0, to: bitmap.pixelsWide, by: 2) {
+                if let c = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
+                   c.alphaComponent > 0.5, c.redComponent > 0.8, c.greenComponent > 0.7,
+                   c.blueComponent > 0.45, c.blueComponent < 0.86, c.redComponent - c.blueComponent > 0.08 {
+                    count += 1
+                }
+            }
+        }
+        return count
+    }
+
+    private func captureFailure(index: Int) {
+        if failures.selected == nil {
+            guard let activity = monitor.document?.recent.first(where: { $0.status == "failed" }) else {
+                fputs("No real failed activity available for the failure-card scenario\n", stderr); exit(1)
+            }
+            failures.open(activity)
+            return
+        }
+        guard !failures.loading, let report = failures.report else {
+            if failures.error != nil { fputs("Real failure details could not be verified\n", stderr); exit(1) }
+            return
+        }
+        capturing = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [self] in
+            do {
+                let path = URL(fileURLWithPath: CommandLine.arguments[index + 1])
+                guard let workspace = ProcessInfo.processInfo.environment["TASK_WORKSPACE"],
+                      path.standardizedFileURL.path.hasPrefix(URL(fileURLWithPath: workspace).standardizedFileURL.path + "/"),
+                      !FileManager.default.fileExists(atPath: path.path),
+                      let view = panel.attachedSheet?.contentView,
+                      let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { throw MonitorError.invalidData }
+                view.cacheDisplay(in: view.bounds, to: bitmap)
+                guard let png = bitmap.representation(using: .png, properties: [:]) else { throw MonitorError.invalidData }
+                try png.write(to: path, options: .withoutOverwriting)
+                let receipt: [String: Any] = ["source": "real restricted SSH", "failure_id": report.id,
+                    "failure_kind": report.kind, "sha256_verified": true, "samples": monitor.successfulSamples,
+                    "window_width": view.bounds.width, "window_height": view.bounds.height,
+                    "resources": report.resources]
+                try JSONSerialization.data(withJSONObject: receipt, options: [.prettyPrinted, .sortedKeys])
+                    .write(to: path.deletingPathExtension().appendingPathExtension("json"), options: .withoutOverwriting)
+                print("Real authenticated failure sheet captured")
+                if CommandLine.arguments.contains("--exit-after-capture") { quit() }
+            } catch { fputs("Failure sheet capture failed: \(error)\n", stderr); exit(1) }
         }
     }
 
@@ -779,12 +833,15 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     }
                     guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { throw MonitorError.invalidData }
                     view.cacheDisplay(in: view.bounds, to: bitmap)
+                    let facePixels = meterFacePixels(bitmap)
+                    if !mini && !admin && height >= 500 { precondition(facePixels >= 1000) }
                     guard let png = bitmap.representation(using: .png, properties: [:]) else { throw MonitorError.invalidData }
                     let image = path.deletingLastPathComponent().appendingPathComponent("widget-\(name).png")
                     try png.write(to: image, options: .withoutOverwriting)
                     evidence.append(["layout": name, "width": width, "height": height, "image": image.lastPathComponent,
                                      "mini": mini, "management": admin, "administrator_authenticated": administration.authorized,
                                      "resolved_layout": WidgetLayout.resolve(width: width, height: height).rawValue,
+                                     "meter_face_pixels": facePixels,
                                      "server_mode": monitor.document?.scope?.mode ?? "unknown", "settings_applied": false])
                     next(index + 1)
                 } catch { fputs("Layout capture failed: \(error)\n", stderr); exit(1) }
@@ -798,7 +855,7 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 struct WidgetMain {
     static func main() {
         if CommandLine.arguments.contains("--self-test") {
-            do { try runModelChecks(); try runAdminChecks() } catch { fputs("Mac model checks failed: \(error)\n", stderr); exit(1) }
+            do { try runModelChecks(); try runAdminChecks(); try runFailureChecks() } catch { fputs("Mac model checks failed: \(error)\n", stderr); exit(1) }
             return
         }
         let application = NSApplication.shared
