@@ -11,6 +11,24 @@ struct Activity: Decodable, Identifiable {
     var ram_bytes: Double? = nil
     var disk_bytes: Double? = nil
     var orphaned: Bool? = nil
+    var direction: String? = nil
+    var bytes: Double? = nil
+    var updated: Double? = nil
+    var job: String? = nil
+
+    var transferRate: Double? {
+        guard let bytes = bytes, let updated = updated, updated > started else { return nil }
+        return bytes / (updated - started)
+    }
+
+    var clockRange: String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: UILanguage.code)
+        formatter.dateFormat = "HH:mm:ss"
+        let start = Date(timeIntervalSince1970: started)
+        let prefix = Calendar.current.isDateInToday(start) ? "" : start.formatted(.dateTime.day().month().locale(formatter.locale)) + " · "
+        return prefix + formatter.string(from: start) + (ended.map { " → " + formatter.string(from: Date(timeIntervalSince1970: $0)) } ?? "")
+    }
 
     func elapsed(at date: Date) -> String {
         let seconds = Int(max(0, min(86400, (ended ?? date.timeIntervalSince1970) - started)))
@@ -49,6 +67,17 @@ struct Telemetry: Decodable {
     let activity: [Activity]
     let active: Activity?
     var worker_cpu_limit: Double? = nil
+    var transfers: [Activity]? = nil
+}
+
+enum WidgetLayout: String {
+    case mini, compact, standard, wide
+
+    static func resolve(width: Double, height: Double) -> WidgetLayout {
+        if height < 220 { return .mini }
+        if width < 440 { return .compact }
+        return width < 700 ? .standard : .wide
+    }
 }
 
 struct UserScope: Decodable {
@@ -78,19 +107,26 @@ struct VPSSnapshot: Decodable {
                        value.free_bytes, value.reserve_bytes, value.host_available_ram]
         guard value.ok, value.budget_bytes > 0,
               numbers.allSatisfy({ $0.isFinite && $0 >= 0 }),
-              (value.telemetry?.activity.count ?? 0) <= 8 else { throw MonitorError.invalidData }
+              (value.telemetry?.activity.count ?? 0) <= 8,
+              (value.telemetry?.transfers?.count ?? 0) <= 16 else { throw MonitorError.invalidData }
         if let t = value.telemetry {
             let metrics = [t.cpu_total, t.cpu_idle, t.host_total_ram, t.worker_ram,
                            t.worker_ram_limit, t.worker_cpu_usec, t.system_disk_total, t.system_disk_free, t.worker_cpu_limit]
             guard t.sample_time.isFinite && t.sample_time >= 0,
                   metrics.compactMap({ $0 }).allSatisfy({ $0.isFinite && $0 >= 0 }),
                   t.cpu_count.map({ 1...4096 ~= $0 }) ?? true else { throw MonitorError.invalidData }
-            for record in t.activity + (t.active.map { [$0] } ?? []) + (value.pool?.active ?? []) {
+            for record in t.activity + (t.active.map { [$0] } ?? []) + (value.pool?.active ?? []) + (t.transfers ?? []) {
                 guard record.id.count == 32, record.id.allSatisfy({ $0.isHexDigit }),
                       record.agent.count <= 64, record.project.count <= 64,
                       ["running", "passed", "failed"].contains(record.status),
                       record.started.isFinite && record.started >= 0 && record.started < 1e11,
                       record.ended.map({ $0.isFinite && $0 >= 0 && $0 < 1e11 }) ?? true else { throw MonitorError.invalidData }
+            }
+            for transfer in t.transfers ?? [] {
+                guard ["upload", "download"].contains(transfer.direction ?? ""),
+                      transfer.bytes.map({ $0.isFinite && $0 >= 0 && $0 < pow(2, 40) }) == true,
+                      transfer.updated.map({ $0.isFinite && $0 >= 0 && $0 < 1e11 }) == true,
+                      transfer.job.map({ $0.count == 32 && $0.allSatisfy(\.isHexDigit) }) ?? true else { throw MonitorError.invalidData }
             }
         }
         if let pool = value.pool {
@@ -123,6 +159,12 @@ struct VPSSnapshot: Decodable {
     var quotaFraction: Double { max(0, min(1, used_bytes / budget_bytes)) }
     var agents: [Activity] { pool?.active ?? (busy ? telemetry?.active.map { [$0] } ?? [] : []) }
     var active: Activity? { agents.first }
+    var transfers: [Activity] { telemetry?.transfers ?? [] }
+    var activeTransfers: [Activity] { transfers.filter { $0.status == "running" } }
+    var connectedAgents: [Activity] {
+        var seen = Set<String>()
+        return (agents + activeTransfers).filter { seen.insert($0.job ?? $0.id).inserted }
+    }
     var recent: [Activity] { (telemetry?.activity ?? []).filter { item in !agents.contains { $0.id == item.id } } }
 }
 
@@ -151,6 +193,13 @@ struct CPUReading {
 func gib(_ bytes: Double?) -> String {
     guard let bytes = bytes, bytes.isFinite, bytes >= 0 else { return "—" }
     return String(format: "%.1f", locale: Locale(identifier: UILanguage.code), bytes / 1_073_741_824)
+}
+
+func transferBytes(_ bytes: Double?) -> String {
+    guard let bytes = bytes, bytes.isFinite, bytes >= 0 else { return "—" }
+    let units = [(1_073_741_824.0, "GiB"), (1_048_576.0, "MiB"), (1024.0, "KiB"), (1.0, "B")]
+    let unit = units.first { bytes >= $0.0 } ?? units.last!
+    return String(format: "%.1f %@", locale: Locale(identifier: UILanguage.code), bytes / unit.0, L(unit.1))
 }
 
 enum UILanguage {
@@ -212,6 +261,30 @@ func runModelChecks() throws {
     let shared = try VPSSnapshot.decode(JSONSerialization.data(withJSONObject: sharing))
     precondition(shared.agents.count == 2 && shared.agents.allSatisfy { $0.cpus == 1 })
     precondition(shared.ramUsageFraction == 0.25)
+    var telemetry = sharing["telemetry"] as! [String: Any]
+    let upload: [String: Any] = ["id": String(repeating: "c", count: 32), "job": String(repeating: "a", count: 32),
+        "agent": "Tests a", "project": "Widget", "status": "running", "started": 100,
+        "direction": "upload", "bytes": 2048, "updated": 102]
+    let download: [String: Any] = ["id": String(repeating: "d", count: 32), "job": String(repeating: "e", count: 32),
+        "agent": "Résultats", "project": "Widget", "status": "running", "started": 100,
+        "direction": "download", "bytes": 4096, "updated": 102]
+    telemetry["transfers"] = [upload, download]; sharing["telemetry"] = telemetry
+    let transferring = try VPSSnapshot.decode(JSONSerialization.data(withJSONObject: sharing))
+    precondition(transferring.connectedAgents.count == 3 && transferring.activeTransfers.count == 2)
+    precondition(transferring.activeTransfers.first?.transferRate == 1024)
+    precondition(transferring.activeTransfers.first?.clockRange.contains(":") == true)
+    var invalidTransfer = upload; invalidTransfer["bytes"] = -1
+    telemetry["transfers"] = [invalidTransfer]
+    sharing["telemetry"] = telemetry
+    do { _ = try VPSSnapshot.decode(JSONSerialization.data(withJSONObject: sharing)); preconditionFailure("accepted invalid transfer") }
+    catch MonitorError.invalidData { }
+    telemetry.removeValue(forKey: "transfers"); sharing["telemetry"] = telemetry
+    precondition(WidgetLayout.resolve(width: 439, height: 220) == .compact)
+    precondition(WidgetLayout.resolve(width: 440, height: 220) == .standard)
+    precondition(WidgetLayout.resolve(width: 699, height: 640) == .standard)
+    precondition(WidgetLayout.resolve(width: 700, height: 640) == .wide)
+    precondition(WidgetLayout.resolve(width: 900, height: 219) == .mini)
+    precondition(transferBytes(1024).hasSuffix(L("KiB")))
     pool["active"] = []; pool["active_count"] = 0; pool["cpu_reserved"] = 0
     pool["ram_reserved"] = 0; pool["ram_available"] = 3221225472
     pool["ram_accounting"] = ["used_bytes": 0]

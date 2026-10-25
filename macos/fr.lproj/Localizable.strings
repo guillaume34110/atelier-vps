@@ -89,3 +89,20 @@
 "RESERVABLE RAM" = "RAM RÉSERVABLE";
 "Task use %@" = "Occupation %@";
 "Committed" = "Engagée";
+
+"Connected agents" = "Agents connectés";
+"%d connected · %d / %d tasks" = "%d connectés · %d / %d tâches";
+"An agent is connected while running a task or transferring files." = "Un agent est connecté pendant un calcul ou un transfert de fichiers.";
+"Transferring files" = "Transfert de fichiers";
+"No connected agent" = "Aucun agent connecté";
+"Transfers" = "Transferts";
+"To VPS" = "Vers le VPS";
+"From VPS" = "Depuis le VPS";
+"In progress" = "En cours";
+"Average transfer speed" = "Débit moyen du transfert";
+"Transfers available after worker update" = "Transferts disponibles après la mise à jour du worker";
+"No transfer yet" = "Aucun transfert pour le moment";
+"%d agents" = "%d agents";
+"KiB" = "Kio";
+"MiB" = "Mio";
+"B" = "o";

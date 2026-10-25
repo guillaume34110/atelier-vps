@@ -12,7 +12,9 @@ several agents can share the pool.
 Call `vps_run` with the actual source directory, an argument array, a short public
 agent label and explicit CPU, disk and timeout reservations. Omit `ram_gib` in MCP
 or use CLI `--ram-gib auto` for previously profiled work: the worker reserves its
-largest measured peak plus 25% and 64 MiB. New profiles start at up to 1 GiB;
+largest measured peak plus 25% and 64 MiB, rounded to 64 MiB. Use this margin
+once: do not double RAM, add another safety multiplier, or reserve the whole
+pool for a small task. New profiles start at up to 1 GiB;
 reserve explicit RAM for new/heavier work with a known peak. Never shrink a claim
 just to fit free RAM, or automatically retry an arbitrary command after failure.
 Inspect `ram_peak_bytes` and the actual admission diagnostics, not final RSS or
@@ -24,6 +26,10 @@ worker, root SSH, Docker or a virtual machine.
 Sources are filtered and streamed. Never transfer secrets, private SSH keys,
 environments, local dependencies, Git history or `CLAUDE.md`. Recreate Linux
 ARM64 dependencies from lockfiles and use the existing shared toolchain/caches.
+Managed dependency caches follow the project and lockfile digest; each use keeps
+that scope for another 30 days. Do not store sources, results, credentials or
+irreplaceable files in these disposable caches. Base tools remain installed.
+After an idle scope expires, budget for downloading its dependencies again.
 For browser work use `CHROMIUM_PATH`, `--no-sandbox` and
 `--disable-dev-shm-usage`. Run real required services before claiming E2E success.
 

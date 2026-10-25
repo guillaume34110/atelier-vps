@@ -49,6 +49,17 @@ disks or low RAM must not prevent retrieval of finished results. Fetch verifies
 manifests; release removes only the explicitly selected completed job. No
 automatic personal-data, result or useful-cache purge is performed.
 
+Managed dependency downloads live under `cache/managed/<project-lock-hash>`.
+The hash uses the public project label and lockfile digest, not the command, so
+tests and builds reuse a scope. Starting any task in that scope refreshes its
+explicit last-used marker; this does not depend on filesystem atime. After 30
+unused days, an hourly idle pass may remove the complete marked scope. Retention
+is conservative at scope level, not a claim to observe each package import.
+The queue lock is exclusive and nonblocking, and live leases independently block
+cleanup. At most eight scopes are removed per pass. Links, missing/invalid markers,
+legacy untracked caches, immutable tools and all job directories stay intact.
+The next use recreates dependencies from lockfiles within its declared budget.
+
 Monitoring exposes bounded public labels, reservations and eight recent jobs,
 without arguments, logs, source contents or credentials. The widget derives CPU
 usage from differences between real cumulative samples.

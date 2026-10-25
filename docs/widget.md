@@ -26,20 +26,31 @@ The widget distinguishes the memory ceiling, committed reservations and RAM
 reservable now. Unknown readings, offline samples and maintenance are identified.
 Public labels are limited to 64 characters; keep secrets out of them.
 
-One monitoring SSH request is in flight at a time. Polling uses 5 seconds with active jobs and
+One monitoring SSH request is in flight at a time. Polling uses 5 seconds with active jobs or transfers and
 30 seconds when idle, backs off to 60 seconds on failure and stops while hidden.
 There are no per-second timers; a localized timestamp identifies the last sample.
 Strict host verification stays enabled. Timeouts stop only the widget's SSH
 frontend, preserving the shared multiplexed connection.
 
-Choose French, English or the system language in the menu. Resources, Tasks and
-History fold independently, preserving preferences for the SSH profile and user.
-Resize the window from 360 points wide; short layouts scroll, and the saved size
+Choose French, English or the system language in the menu. Resources, Connected
+agents, Transfers and History fold independently, preserving preferences for the
+SSH profile and user. Agents are connected during a calculation or an active
+file transfer, not while an idle chat window happens to be open. Job IDs deduplicate
+an upload and its calculation. Transfers show real archive bytes, direction,
+average throughput and start/end clock times. History shows the same local clock
+times, plus a date for older tasks. No commands, paths or secrets are published.
+
+Resize the window from 340 points wide; short layouts scroll, and the saved size
 is restored within the screen bounds. Data refreshes never overwrite that size.
+Below 220 points high it automatically becomes a mini bar. Growing it switches
+back to the full view. Below 440 points wide dials/rows compact themselves;
+from 700 points agents and activity use columns. The same authenticated data and
+administrator draft survive these layout transitions.
 
 The mini-bar button (or Options → Mini bar layout) reduces the panel to 400×96
 points, resizable from 340 points wide. It keeps CPU, reservable RAM, committed
-RAM, task slots and free storage visible. The expand button restores the full
+RAM, task slots, free storage, connected agents and transfer directions visible.
+The expand button restores the full
 window; the chosen layout survives relaunch. Offline values are dimmed and marked.
 
 An **administrator-authenticated** connection adds Monitoring / Management tabs.

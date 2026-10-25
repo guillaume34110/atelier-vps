@@ -26,10 +26,16 @@ atelier-vps run --source ./mon-projet --agent "Build · frontend" \
 Les sources sont filtrées et envoyées sans archive locale supplémentaire.
 Node/Python/Java, Chromium et les outils de compilation sont partagés, en lecture
 seule. Les dépendances sont recréées pour Linux ARM64.
+Les outils de base restent installés, sans immobiliser leur RAM au repos. Les
+caches de dépendances sont réutilisés par projet et version du verrouillage :
+chaque usage renouvelle leur rétention de 30 jours. Un nettoyage horaire au repos,
+sous verrou exclusif, retire seulement les caches gérés arrivés à expiration.
+Les sources, résultats, outils et anciens caches non suivis restent préservés.
 
 Le mode RAM `auto` apprend le plus grand pic observé pour cette commande et ses
 dépendances, puis ajoute 25 % et 64 Mio de marge. La première passe réserve
-jusqu’à 1 Gio. Une valeur explicite reste préférable pour un nouveau travail
+jusqu’à 1 Gio. Cette marge ne s'applique qu'une fois : pas de réservation ×2.
+Une valeur explicite reste préférable pour un nouveau travail
 lourd dont le pic est connu. Un refus ne réduit jamais la réservation en silence.
 
 Deux modes sont disponibles : opportuniste pour utiliser la capacité libre d’un
@@ -50,6 +56,7 @@ Un refus demande d’attendre ou de choisir une autre machine compatible.
 
 Le [widget Mac](widget.md) affiche deux VU-mètres à aiguilles, les agents actifs,
 leurs réservations et l’espace de l’utilisateur connecté. Français et anglais,
+transferts mesurés, heures de début/fin et disposition automatique selon la taille.
 sections repliables, fenêtre redimensionnable ; collecte arrêtée lorsqu’il est
 masqué et espacée au repos. Graphite, ivoire et touche française.
 

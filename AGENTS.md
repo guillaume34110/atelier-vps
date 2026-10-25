@@ -29,6 +29,12 @@ lecture seule dans l'image, à `/app/AGENTS.md`.
   Garder les dépendances des projets séparées, avec les caches partagés seulement
   entre travaux d'un même développeur. Ne pas
   installer un second SDK ou navigateur sans besoin concret et budget explicite.
+- Réutiliser les caches de dépendances gérés par projet et empreinte des fichiers
+  de verrouillage. Leur dernière utilisation prolonge la rétention de 30 jours ;
+  seul le nettoyage au repos sous verrou exclusif peut retirer ces caches
+  identifiés. Ne jamais y stocker sources, secrets ou résultats irremplaçables.
+  Les outils de base, caches anciens non suivis et données des calculs restent
+  préservés. La marge RAM automatique s'applique une fois, sans multiplicateur ×2.
 - Pour le navigateur, utiliser `CHROMIUM_PATH`, un profil temporaire et les
   arguments des exemples fournis. Les binaires macOS et les outils Android Linux
   x86 ne fonctionnent pas sur ce VPS ARM64 : conserver émulateurs/NDK concernés

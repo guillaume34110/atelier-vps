@@ -12,10 +12,18 @@ Preserve the existing ivory analog dials, orange needles and their rounded cards
 The user explicitly requested no restyling of the full widget. Semantic controls, visible
 labels, native keyboard navigation and French/English strings apply to both tabs.
 
-Full windows support 360–900 point widths and vertical scrolling down to 240
-points high. Mini bars start at 400×96 points, with a minimum width of 340. They
-show CPU, RAM reservable now, committed RAM, slots and disk free. Expanding
-restores the full frame. Monitoring uses the same samples in both layouts.
+Windows support 340–900 point widths. Heights below 220 points automatically
+switch to a mini bar; growing the window restores monitoring. Widths below 440
+use compact dials and rows, 440–699 use the standard stack, and 700+ use columns
+for agents and activity. Full views scroll. Mini bars start at 400×96 and show
+CPU, reservable RAM, committed RAM, slots, disk free, connected agents and transfer
+directions. Expanding restores the full frame. Both layouts share the same samples.
+
+An agent is connected while a real calculation or transfer channel is active.
+Do not imply that idle chat windows are registered. Transfer counters measure
+actual archive bytes, with average speeds; completed transfers remain bounded.
+History displays start/end clock times in the Mac's local timezone, with the
+date for older activity. Offline figures are visibly stale.
 
 The RAM dial's large value is reservable RAM. Its needle and percentage caption
 show actual task use divided by reserved plus still-reservable RAM: 0% when idle,
