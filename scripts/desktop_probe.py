@@ -67,29 +67,36 @@ def capture(value, output, peer=None):
         receive(peer, name_size)
         peer.sendall(b'\0\0\0\0' + struct.pack('>BBBBHHHBBB3x', 32, 24, 0, 1, 255, 255, 255, 16, 8, 0))
         peer.sendall(b'\x02\0\0\x01' + struct.pack('>i', 0))
-        peer.sendall(b'\x03\0' + struct.pack('>HHHH', 0, 0, width, height))
         pixels = bytearray(width * height * 4)
-        for _ in range(20):
-            kind = receive(peer, 1)[0]
-            if kind == 2:
-                continue
-            if kind == 3:
-                length, = struct.unpack('>3xI', receive(peer, 7)); assert length <= 65536
-                receive(peer, length); continue
-            assert kind == 0, 'unexpected RFB server message'
-            rectangles, = struct.unpack('>xH', receive(peer, 3)); assert 0 < rectangles <= 512
-            for _ in range(rectangles):
-                x, y, w, h, encoding = struct.unpack('>HHHHi', receive(peer, 12))
-                assert encoding == 0 and w > 0 and h > 0 and x + w <= width and y + h <= height
-                data = receive(peer, w * h * 4)
-                for row in range(h):
-                    start = ((y + row) * width + x) * 4
-                    pixels[start:start + w * 4] = data[row * w * 4:(row + 1) * w * 4]
-            break
+        frames = 0; colors = set(); deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            peer.sendall(b'\x03\0' + struct.pack('>HHHH', 0, 0, width, height))
+            for _ in range(20):
+                kind = receive(peer, 1)[0]
+                if kind == 2:
+                    continue
+                if kind == 3:
+                    length, = struct.unpack('>3xI', receive(peer, 7)); assert length <= 65536
+                    receive(peer, length); continue
+                assert kind == 0, 'unexpected RFB server message'
+                rectangles, = struct.unpack('>xH', receive(peer, 3)); assert 0 <= rectangles <= 512
+                for _ in range(rectangles):
+                    x, y, w, h, encoding = struct.unpack('>HHHHi', receive(peer, 12))
+                    assert encoding == 0 and w > 0 and h > 0 and x + w <= width and y + h <= height
+                    data = receive(peer, w * h * 4)
+                    for row in range(h):
+                        start = ((y + row) * width + x) * 4
+                        pixels[start:start + w * 4] = data[row * w * 4:(row + 1) * w * 4]
+                break
+            else:
+                raise RuntimeError('no real desktop framebuffer was received')
+            frames += 1
+            colors = {bytes(pixels[i:i + 3]) for i in range(0, len(pixels), 400)}
+            if len(colors) > 8:
+                break
+            time.sleep(.5)
         else:
-            raise RuntimeError('no real desktop framebuffer was received')
-    colors = {bytes(pixels[i:i + 3]) for i in range(0, len(pixels), 400)}
-    assert len(colors) > 8, 'the remote desktop is blank'
+            raise RuntimeError(f'the remote desktop remained blank after {frames} frames ({len(colors)} sampled colors)')
     rows = bytearray()
     for y in range(height):
         rows.append(0)
@@ -101,7 +108,7 @@ def capture(value, output, peer=None):
     png = b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', width, height, 8, 2, 0, 0, 0))
     png += chunk(b'IDAT', zlib.compress(rows, 6)) + chunk(b'IEND', b'')
     output.write_bytes(png)
-    return {'width': width, 'height': height, 'colors_sampled': len(colors),
+    return {'width': width, 'height': height, 'colors_sampled': len(colors), 'frames_received': frames,
             'vnc_password_required': True, 'image_sha256': hashlib.sha256(png).hexdigest()}
 
 

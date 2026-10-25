@@ -1,5 +1,7 @@
 import json
 import hashlib
+import io
+import struct
 from pathlib import Path
 import tempfile
 import unittest
@@ -10,6 +12,7 @@ import desktop_service as desktop
 import desktop_runtime
 import resources
 import worker
+from scripts import desktop_probe
 
 
 class DesktopTests(unittest.TestCase):
@@ -219,6 +222,40 @@ class DesktopTests(unittest.TestCase):
         with patch('quota_protection.protect_quota'), patch.object(worker, 'validate_environment'), \
                 patch.object(worker, 'run_job', side_effect=calculation):
             desktop.supervise(ident)
+
+    def frame_peer(self, rendered):
+        frame = b'\0\0\0\x01' + struct.pack('>HHHHi', 0, 0, 1280, 800, 0)
+        handshake = (b'RFB 003.008\n' + b'\x01\x02' + b'x' * 16 + b'\0' * 4
+                     + struct.pack('>HH', 1280, 800) + b'\0' * 20)
+        blank = b'\0' * (1280 * 800 * 4)
+        payload = handshake + frame + blank
+        if rendered:
+            payload += frame + bytes(range(256)) * (len(blank) // 256)
+        class Peer:
+            def __init__(self):
+                self.data = io.BytesIO(payload); self.requests = []
+            def recv(self, size):
+                return self.data.read(size)
+            def sendall(self, value):
+                self.requests.append(value)
+        return Peer()
+
+    def test_capture_waits_for_paint_without_restarting_or_reauthenticating(self):
+        peer = self.frame_peer(True)
+        with patch.object(desktop_probe, 'answer_challenge', return_value=b'x' * 16), \
+                patch.object(desktop_probe.time, 'sleep'):
+            result = desktop_probe.capture({'password': 'fixture'}, self.root / 'frame.png', peer)
+        self.assertEqual(result['frames_received'], 2)
+        self.assertGreater(result['colors_sampled'], 8)
+        self.assertEqual(sum(x.startswith(b'\x03') for x in peer.requests), 2)
+
+    def test_capture_still_refuses_a_persistently_blank_desktop(self):
+        with patch.object(desktop_probe, 'answer_challenge', return_value=b'x' * 16), \
+                patch.object(desktop_probe.time, 'sleep'), \
+                patch.object(desktop_probe.time, 'monotonic', side_effect=[0, 0, 31]):
+            with self.assertRaisesRegex(RuntimeError, 'remained blank'):
+                desktop_probe.capture({'password': 'fixture'}, self.root / 'blank.png', self.frame_peer(False))
+        self.assertFalse((self.root / 'blank.png').exists())
 
 
 if __name__ == '__main__':
