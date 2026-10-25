@@ -22,6 +22,12 @@ For another compatible host, configure this command with absolute paths:
 Tools: `vps_status`, `vps_run`, `vps_fetch`, `vps_release`. Set the host's timeout
 above the longest remote job. The routing skill prefers compatible VPS work;
 it cannot override permissions, unavailable resources or incompatible runtimes.
+These tools share the widget's private registry and choose a compatible server
+with the complete requested resources. Keep the returned `connection:JOB_ID`
+reference when fetching or releasing. `vps_server_add` and
+`vps_connect_from_clipboard` register connections; administrator settings and
+invitation tools require the separate administrator identity.
+See [multiple servers and invitations](fleet.md).
 
 Fetch creates `output/task-tmp` in the supplied project. With the canonical
 `~/.local/bin/workspace-budget.py` helper, MCP uses that guard with a 0.6 GiB

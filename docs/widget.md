@@ -20,8 +20,11 @@ by the current task envelope (reserved plus still reservable), with a percentage
 caption and warning marks at the high end. An idle pool reads 0%, even when worker
 supervisors or caches occupy memory. Missing usage readings remain unavailable.
 It does not present the container ceiling as available memory.
-Storage, reservations, agents and recent results belong to that same
-developer. Host/system disk and other developers' metrics are not displayed.
+Storage, reservations, agents and recent results belong to the authenticated
+developer. Global sums accessible connected pools, with detail by server/team;
+offline servers and duplicate aliases do not add capacity. A separate
+administrator identity can read team counters in Management on explicit refresh.
+See [server connections and one-use invitations](fleet.md).
 The widget distinguishes the memory ceiling, committed reservations and RAM
 reservable now. Unknown readings, offline samples and maintenance are identified.
 Public labels are limited to 64 characters; keep secrets out of them.
@@ -72,7 +75,9 @@ after a successful `settings get`; a developer connection cannot grant this role
 Administrator actions use a separate bounded SSH request and do not poll.
 
 Management edits the Solo / Team mode, pool CPU/RAM/disk/slots, member allocations,
-enabled access and public ed25519 keys. Preview validates the complete candidate
+enabled access and optional advanced public ed25519 keys. Add a member, apply
+their allocation, then copy a private one-device invitation; the recipient's key
+is generated locally. Preview validates the complete candidate
 on the server; Apply uses that exact preview and revision. Editing invalidates
 the preview. Active tasks block affected changes; stale revisions require reload.
 Interrupted applications retain their exact candidate for resumption. Solo

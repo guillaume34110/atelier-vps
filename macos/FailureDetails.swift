@@ -55,7 +55,7 @@ struct FailureReport: Decodable {
             let task = Process()
             task.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
             task.arguments = ["-xOf", "-", name]
-            return try boundedFailureOutput(task, input: data, limit: limit)
+                return try boundedPrivateOutput(task, input: data, limit: limit)
         }
         struct Entry: Decodable { let bytes: Int; let sha256: String }
         let manifest = try JSONDecoder().decode([String: Entry].self, from: extract("manifest.json", limit: 4096))
@@ -67,11 +67,11 @@ struct FailureReport: Decodable {
     }
 }
 
-private func boundedFailureOutput(_ task: Process, input: Data, limit: Int) throws -> Data {
+func boundedPrivateOutput(_ task: Process, input: Data, limit: Int, timeout: Double = 30) throws -> Data {
     let source = Pipe(), output = Pipe()
     task.standardInput = source; task.standardOutput = output; task.standardError = FileHandle.nullDevice
     try task.run()
-    DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 30) { [weak task] in
+    DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout) { [weak task] in
         guard let task = task, task.isRunning else { return }
         task.terminate()
         DispatchQueue.global().asyncAfter(deadline: .now() + 1) { [weak task] in
@@ -101,13 +101,13 @@ final class FailureDetails: ObservableObject {
     var onUpdate: (() -> Void)?
     private var generation = UUID()
     private var process: Process?
-    private let host: String
-
-    init(host: String) { self.host = host }
+    var resolveConnection: ((Activity) -> ServerConnection?)?
+    private var connection: ServerConnection?
 
     func open(_ activity: Activity) {
         guard activity.status == "failed" else { return }
         cancel(); report = nil; error = nil
+        connection = resolveConnection?(activity)
         selected = activity
     }
 
@@ -120,17 +120,16 @@ final class FailureDetails: ObservableObject {
     func load(_ activity: Activity) {
         cancel(); report = nil; error = nil; loading = true
         let token = generation, task = Process()
-        guard host.range(of: "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$", options: .regularExpression) != nil,
+        guard let arguments = connection?.arguments("fetch"), selected?.uiID == activity.uiID,
               activity.id.count == 32, activity.id.allSatisfy(\.isHexDigit) else { loading = false; error = L("Failure details unavailable"); return }
         task.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-        task.arguments = ["-T", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-o", "ConnectTimeout=5",
-                          "-o", "ServerAliveInterval=5", "-o", "ServerAliveCountMax=1", "-o", "LogLevel=ERROR", host, "fetch"]
+        task.arguments = arguments
         process = task
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let value: Result<FailureReport, Error> = Result {
                 var input = try JSONSerialization.data(withJSONObject: ["id": activity.id, "paths": ["diagnostic.json"]])
                 input.append(10)
-                return try FailureReport.decodeArchive(boundedFailureOutput(task, input: input, limit: 131072), expectedID: activity.id)
+                return try FailureReport.decodeArchive(boundedPrivateOutput(task, input: input, limit: 131072), expectedID: activity.id)
             }
             DispatchQueue.main.async { [weak self] in
                 guard let self = self, self.generation == token else { return }
@@ -216,7 +215,7 @@ func runFailureChecks() throws {
         try JSONSerialization.data(withJSONObject: manifest).write(to: directory.appendingPathComponent("manifest.json"))
         let task = Process(); task.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
         task.arguments = ["-cf", "-", "-C", directory.path, "manifest.json", "diagnostic.json"]
-        return try boundedFailureOutput(task, input: Data(), limit: 131072)
+        return try boundedPrivateOutput(task, input: Data(), limit: 131072)
     }
     let verified = try FailureReport.decodeArchive(archive(sha), expectedID: ident)
     precondition(verified.log_tail.contains("expected 42"))

@@ -27,7 +27,7 @@ def main():
     binary = bundle / 'Contents/MacOS/usevps'
     binary.parent.mkdir(parents=True)
     (bundle / 'Contents/Resources').mkdir()
-    sources = [source / name for name in ['WidgetModel.swift', 'AdminSettings.swift', 'AdminView.swift', 'FailureDetails.swift', 'WidgetApp.swift']]
+    sources = [source / name for name in ['WidgetModel.swift', 'FleetModel.swift', 'FleetView.swift', 'AdminSettings.swift', 'AdminView.swift', 'FailureDetails.swift', 'WidgetApp.swift']]
     translations = sorted(source.glob('*.lproj/*.strings'))
     assets = [source / 'assets/meter-face.png']
     for asset in assets:
@@ -53,7 +53,7 @@ def main():
     subprocess.run(['codesign', '--force', '--sign', '-', '--timestamp=none', str(bundle)], check=True, timeout=30)
     subprocess.run(['codesign', '--verify', '--deep', '--strict', str(bundle)], check=True, timeout=30)
     if args.live:
-        subprocess.run([sys.executable, str(source / 'check_live.py'), '--app', str(bundle)], check=True, timeout=65)
+        subprocess.run([sys.executable, str(source / 'check_live.py'), '--app', str(bundle)], check=True, timeout=120)
     result = {'status': 'passed', 'app': str(bundle), 'source_digest': digest,
               'bytes': sum(p.stat().st_size for p in bundle.rglob('*') if p.is_file()),
               'model_checks': 'passed', 'signature': 'verified local signature'}

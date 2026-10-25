@@ -21,25 +21,52 @@ server = MCPServer('Atelier VPS', instructions='Prefer this VPS for compatible L
                    'Never send secrets or local dependencies; a refused or failed job is not a passed check.')
 
 
-def response(action, request=None, source=None):
-    rc, data = vps.transport(client_config.host(), action, request, source=source)
-    if not data or len(data) > 65536:
-        raise RuntimeError('invalid bounded gateway response')
-    value = json.loads(data)
-    if rc:
-        value['ok'] = False
-    return value
+def response(action, request=None, source=None, host=None):
+    return vps.json_request(host or client_config.host(), action, request, source=source,
+                            timeout=3700 if action=='run' else 30)[1]
 
 
 @server.tool(structured_output=True)
-def vps_status() -> dict[str, Any]:
-    """Read real VPS health, running agents and available CPU/RAM/disk reservations."""
-    return response('status')
+def vps_status(server: str | None = None) -> dict[str, Any]:
+    """Read fresh capacity on connected servers and deduplicated Global totals.
+
+    Offline/stale/unidentified servers do not contribute to a multi-server sum.
+    A job must fit one worker; combined RAM is never one shared address space.
+    """
+    return vps.fleet_status(server)
+
+
+@server.tool(structured_output=True)
+def vps_server_add(identifier: str, name: str, team: str, ssh_alias: str,
+                   admin_ssh_alias: str | None = None) -> dict[str, Any]:
+    """Register an already configured restricted SSH connection after authentication.
+
+    One team belongs to each server. Aliases keep their local credentials; no
+    private key is read or transferred. Optional administrator access must
+    authenticate separately and match the same physical server.
+    """
+    import onboarding
+    return onboarding.add_alias(identifier,name,team,ssh_alias,admin_ssh_alias)
+
+
+@server.tool(structured_output=True)
+def vps_connect_from_clipboard() -> dict[str, Any]:
+    """Accept the invitation explicitly copied by the user, without echoing it.
+
+    Use only when asked to connect that copied invitation. The Mac widget or
+    CLI standard input handles invitations on machines without a clipboard.
+    """
+    if sys.platform!='darwin':
+        raise RuntimeError('paste the invitation into the widget, or use atelier-vps connect --stdin')
+    import onboarding
+    raw=onboarding.bounded_output(['/usr/bin/pbpaste'],limit=8193,timeout=5)
+    return onboarding.accept(raw.decode().strip())
 
 
 @server.tool(structured_output=True)
 def vps_run(source: str, argv: list[str], agent: str, disk_gib: float,
-            ram_gib: float | None = None, cpus: int = 1, timeout: int = 900) -> dict[str, Any]:
+            ram_gib: float | None = None, cpus: int = 1, timeout: int = 900,
+            server: str | None = None, arch: str = 'aarch64') -> dict[str, Any]:
     """Run a Linux ARM64 task, streaming filtered sources without a local archive.
 
     Reserve the full peak, including dependencies, caches, downloads and outputs.
@@ -50,6 +77,9 @@ def vps_run(source: str, argv: list[str], agent: str, disk_gib: float,
     headroom (first run: up to 1 GiB). Explicit RAM overrides are respected.
     RAM is never silently reduced to fit a busy pool. New/heavier work should
     reserve its known full peak; dependency-lock changes start a new profile.
+    Without server, select an authenticated compatible worker that can admit
+    this complete claim. Use the returned job_ref for fetch/release. A failed
+    executed command is never automatically retried on another server.
     """
     directory = Path(source).expanduser().resolve()
     if not directory.is_dir() or not argv or not all(isinstance(x, str) and '\x00' not in x for x in argv):
@@ -57,29 +87,26 @@ def vps_run(source: str, argv: list[str], agent: str, disk_gib: float,
     if not all(math.isfinite(x) and x > 0 for x in (disk_gib, ram_gib) if x is not None):
         raise ValueError('finite, positive disk and RAM reservations are required')
     list(vps.inputs(directory))
-    state = vps_status()
-    if not state.get('ok') or not state.get('admit'):
-        raise RuntimeError('VPS not admitting work; wait for resources or choose a compatible machine')
-    return response('run', {'argv': argv, 'agent': public_label(agent, 'Agent'),
+    return vps.run_on_server({'argv': argv, 'agent': public_label(agent, 'Agent'),
                            'project': public_label(directory.name, 'Project'), 'timeout': timeout,
                            'disk_bytes': math.ceil(disk_gib * vps.GIB),
-                           'ram_bytes': vps.ram_bytes(ram_gib, state), 'cpus': cpus,
-                           'dependency_digest': vps.dependency_digest(directory)}, directory)
+                           'ram_bytes': None if ram_gib is None else math.ceil(ram_gib*vps.GIB), 'cpus': cpus,
+                           'dependency_digest': vps.dependency_digest(directory)}, directory, server, arch)[1]
 
 
 @server.tool(structured_output=True)
-def vps_fetch(job_id: str, paths: list[str], project: str) -> dict[str, Any]:
+def vps_fetch(job_id: str, paths: list[str], project: str, server: str | None = None) -> dict[str, Any]:
     """Fetch <=256 MiB with SHA256 verification into the local project's task workspace.
 
     Preserve useful files outside task-tmp before cleanup. Never overwrite an
     existing task workspace; inspect and finish that prior pass first.
     """
-    vps.safe_path(job_id)
+    profile, ident = vps.job_target(job_id, server)
     directory = Path(project).expanduser().resolve()
     if not directory.is_dir():
         raise ValueError('project directory must exist')
     helper = Path.home() / '.local/bin/workspace-budget.py'
-    args = [sys.executable, str(ROOT / 'vps.py'), 'fetch', job_id, *paths]
+    args = [sys.executable, str(ROOT / 'vps.py'), '--server', profile['id'], 'fetch', profile['id']+':'+ident, *paths]
     env = os.environ.copy()
     if helper.is_file():
         command = [sys.executable, str(helper), '--temp-gib', '0.6', 'run', str(directory), '--', *args]
@@ -104,52 +131,59 @@ def vps_fetch(job_id: str, paths: list[str], project: str) -> dict[str, Any]:
 
 
 @server.tool(structured_output=True)
-def vps_release(job_id: str, results_preserved: bool) -> dict[str, Any]:
+def vps_release(job_id: str, results_preserved: bool, server: str | None = None) -> dict[str, Any]:
     """Delete only this completed remote job after its useful results are preserved."""
     if not results_preserved:
         raise ValueError('fetch, verify and preserve useful results before release')
-    return response('release', {'id': job_id})
+    profile, ident = vps.job_target(job_id, server)
+    return response('release', {'id': ident}, host=profile['ssh_host'])
 
 
-def settings_response(action, **request):
-    rc, raw = vps.transport(client_config.admin_host(), 'settings', {'action': action, **request})
-    if not raw or len(raw) > 65536:
-        raise RuntimeError('invalid administrator response')
-    value = json.loads(raw)
-    if rc:
-        value['ok'] = False
-    return value
+def settings_response(action, server=None, **request):
+    return vps.admin_request(action,server,**request)
 
 
 @server.tool(structured_output=True)
-def admin_settings_get() -> dict[str, Any]:
+def admin_invitation_create(member: str, expected_revision: str, server: str | None = None) -> dict[str, Any]:
+    """Administrator only: create a 30-minute, one-device link for an applied member.
+
+    The secret link is saved in a private local 0600 file; only its path and
+    expiration are returned. Do not read or paste that link into the chat.
+    The joining device generates its key locally. Existing access and tasks remain intact.
+    """
+    import onboarding
+    return onboarding.deliver_invitation(member,server,expected_revision)
+
+
+@server.tool(structured_output=True)
+def admin_settings_get(server: str | None = None) -> dict[str, Any]:
     """Administrator only: inspect modes, per-developer quotas and settings revision.
 
     Requires a separately authenticated, restricted administrator SSH alias.
     Ordinary development access cannot call the root settings helper.
     """
-    return settings_response('get')
+    return settings_response('get',server)
 
 
 @server.tool(structured_output=True)
-def admin_settings_preview(policy: dict[str, Any]) -> dict[str, Any]:
+def admin_settings_preview(policy: dict[str, Any], server: str | None = None) -> dict[str, Any]:
     """Administrator only: preview developer percentages as CPU/RAM/disk limits.
 
     No mutation. Refuses overcommit, quotas below preserved data and unavailable
     host RAM. Developer IDs bind to separate SSH users and private workspaces.
     """
-    return settings_response('preview', policy=policy)
+    return settings_response('preview',server,policy=policy)
 
 
 @server.tool(structured_output=True)
-def admin_settings_apply(policy: dict[str, Any], expected_revision: str) -> dict[str, Any]:
+def admin_settings_apply(policy: dict[str, Any], expected_revision: str, server: str | None = None) -> dict[str, Any]:
     """Administrator only: apply a previewed policy on its current revision.
 
     Drain affected work first; active jobs block updates. Only changed workers
     are deployed. Data is never purged. Interrupted updates remain pending and
     must be resumed with the same candidate; unaffected developers continue.
     """
-    return settings_response('apply', policy=policy, expected_revision=expected_revision)
+    return settings_response('apply',server,policy=policy, expected_revision=expected_revision)
 
 
 if __name__ == '__main__':

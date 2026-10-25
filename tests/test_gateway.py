@@ -52,5 +52,15 @@ class GatewayTests(unittest.TestCase):
                         gateway.main()
                     execute.assert_not_called()
                 else:
-                    gateway.main()
+                    with patch.object(gateway, 'server_identity', return_value='a'*64):
+                        gateway.main()
                     self.assertEqual(execute.call_args.args[1][-1], "status")
+                    self.assertIn('USEVPS_SERVER_ID='+'a'*64, execute.call_args.args[1])
+
+    def test_server_identity_is_opaque_and_stable_across_teams(self):
+        with patch.object(gateway.Path, 'read_bytes', return_value=b'a'*32):
+            identity=gateway.server_identity()
+            self.assertEqual(len(identity),64)
+            self.assertEqual(identity,gateway.server_identity())
+        with patch.object(gateway.Path, 'read_bytes', return_value=b''):
+            with self.assertRaises(ValueError):gateway.server_identity()

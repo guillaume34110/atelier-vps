@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 import Darwin
 
-private enum Configuration {
+enum Configuration {
     static let values: [String: String] = {
         let file = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".config/atelier-vps/config.json")
         guard let data = try? Data(contentsOf: file), data.count <= 16384,
@@ -38,37 +38,94 @@ final class Monitor: ObservableObject {
     @Published var latency: Double = 0
     @Published var error = "Connecting…"
     @Published var compact = false
+    @Published var servers: [ServerSample] = []
+    @Published var selectedID: String?
     var onUpdate: (() -> Void)?
     var successfulSamples = 0
     var raw = Data()
     private var process: Process?
     private var timer: Timer?
-    private var failures = 0
     private var visible = true
+    private var queue: [String] = []
+    private var retryCount: [String: Int] = [:]
+    private var nextSample: [String: Date] = [:]
+
+    init() {
+        selectedID = CommandLine.arguments.contains("--capture") ? nil : UserDefaults.standard.string(forKey: "atelier-server-selection")
+        reloadConnections(start: false)
+    }
+
+    func reloadConnections(start: Bool = true) {
+        do {
+            let legacy = ServerConnection(id: "default", name: Configuration.values["server_name"] ?? "Atelier VPS",
+                team: Configuration.values["team_name"] ?? "Personnel", ssh_host: Configuration.host,
+                admin_ssh_host: Configuration.adminHost)
+            let connections = try ServerConnection.load(legacy: legacy)
+            servers = connections.map { connection in
+                if var previous = servers.first(where: { $0.id == connection.id && $0.connection.ssh_host == connection.ssh_host
+                    && $0.connection.server_id == connection.server_id && $0.connection.scope == connection.scope }) {
+                    previous.connection = connection; return previous
+                }
+                return ServerSample(connection: connection)
+            }
+            if let id = selectedID, !servers.contains(where: { $0.id == id }) { selectedID = nil }
+        } catch { self.error = "Connection configuration invalid" }
+        recompute()
+        if start { refresh() }
+    }
+
+    func select(_ id: String?) {
+        guard id == nil || servers.contains(where: { $0.id == id }) else { return }
+        if selectedID != id { document = nil; raw = Data(); received = nil }
+        selectedID = id
+        if !CommandLine.arguments.contains("--capture") { UserDefaults.standard.set(id, forKey: "atelier-server-selection") }
+        recompute(); onUpdate?()
+    }
+
+    func target(for activity: Activity) -> ServerConnection? {
+        if let id = activity.connection ?? selectedID { return servers.first(where: { $0.id == id })?.connection }
+        let counted = countedServers(servers)
+        return counted.count == 1 ? counted.first?.connection : nil
+    }
+
+    var administratorConnection: ServerConnection? {
+        let sample = selectedID.flatMap { id in servers.first { $0.id == id } }
+            ?? (servers.count == 1 ? servers.first : nil)
+        guard let sample = sample, sample.connection.admin_ssh_host != nil,
+              sample.fresh || sample.connection.server_id != nil,
+              servers.count == 1 || sample.identity != nil else { return nil }
+        var value = sample.connection; value.server_id = sample.identity
+        return value
+    }
 
     func setVisible(_ value: Bool) {
-        visible = value
-        timer?.invalidate()
-        if value { refresh() }
+        visible = value; timer?.invalidate()
+        if value { recompute(); refresh() } else { queue.removeAll() }
     }
 
     func refresh() {
         guard process == nil else { return }
         timer?.invalidate()
+        queue = servers.filter { $0.connection.active }.map(\.id)
+        sampleNext()
+    }
+
+    private func sampleNext() {
+        guard process == nil, visible else { return }
+        guard !queue.isEmpty else { refreshing = false; schedule(); return }
+        let id = queue.removeFirst()
+        guard let connection = servers.first(where: { $0.id == id })?.connection,
+              let arguments = connection.arguments("status") else { sampleNext(); return }
         refreshing = true
         let task = Process(), output = Pipe(), errors = Pipe()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-        task.arguments = ["-T", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes",
-                          "-o", "ConnectTimeout=5", "-o", "ServerAliveInterval=5",
-                          "-o", "ServerAliveCountMax=1", "-o", "LogLevel=ERROR", Configuration.host, "status"]
-        task.standardInput = FileHandle.nullDevice
-        task.standardOutput = output
-        task.standardError = errors
+        task.arguments = arguments
+        task.standardInput = FileHandle.nullDevice; task.standardOutput = output; task.standardError = errors
         process = task
         let started = ProcessInfo.processInfo.systemUptime
         do { try task.run() }
-        catch { process = nil; finish(nil, started: started); return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 12) { [weak self, weak task] in
+        catch { process = nil; finish(nil, started: started, connection: connection); return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self, weak task] in
             guard let task = task, self?.process === task, task.isRunning else { return }
             task.terminate()
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak task] in
@@ -90,42 +147,77 @@ final class Monitor: ObservableObject {
             let result = task.terminationStatus == 0 ? data : nil
             DispatchQueue.main.async { [weak self] in
                 self?.process = nil
-                self?.finish(result, started: started)
+                self?.finish(result, started: started, connection: connection)
             }
         }
     }
 
-    private func finish(_ data: Data?, started: Double) {
-        refreshing = false
-        if let data = data, let next = try? VPSSnapshot.decode(data) {
-            cpu = CPUReading(previous: document?.telemetry, current: next.telemetry)
-            document = next
-            raw = data
-            received = Date()
-            latency = ProcessInfo.processInfo.systemUptime - started
-            connected = true
-            failures = 0
-            successfulSamples += 1
-            error = ""
+    private func finish(_ data: Data?, started: Double, connection: ServerConnection) {
+        if let index = servers.firstIndex(where: { $0.id == connection.id }) {
+            do {
+                guard let data = data else { throw MonitorError.connection }
+                let next = try VPSSnapshot.decode(data)
+                let current = servers[index].connection
+                guard current.ssh_host == connection.ssh_host,
+                      current.server_id.map({ $0 == next.server_id }) ?? true,
+                      current.scope.map({ $0 == next.scope?.id }) ?? true else { throw MonitorError.invalidData }
+                servers[index].cpu = CPUReading(previous: servers[index].document?.telemetry, current: next.telemetry)
+                servers[index].document = next; servers[index].raw = data
+                servers[index].received = Date(); servers[index].connected = true
+                servers[index].latency = ProcessInfo.processInfo.systemUptime - started
+                servers[index].successfulSamples += 1; retryCount[connection.id] = 0
+                let active = !next.connectedAgents.isEmpty || servers[index].successfulSamples < 2
+                nextSample[connection.id] = Date().addingTimeInterval(active ? 5 : 30)
+            } catch {
+                servers[index].connected = false
+                let failures = (retryCount[connection.id] ?? 0) + 1; retryCount[connection.id] = failures
+                let delay = min(60.0, 5 * pow(2.0, Double(min(failures - 1, 4))))
+                nextSample[connection.id] = Date().addingTimeInterval(delay)
+            }
+        }
+        recompute(); onUpdate?()
+        if visible { sampleNext() } else { refreshing = false }
+    }
+
+    private func recompute() {
+        if let id = selectedID, let sample = servers.first(where: { $0.id == id }) {
+            if let snapshot = sample.document { document = snapshot.onServer(sample.id); raw = sample.raw }
+            connected = sample.fresh && sample.connection.active
+            cpu = connected ? sample.cpu : CPUReading(previous: nil, current: nil)
+            received = sample.received; latency = sample.latency; successfulSamples = sample.successfulSamples
+        } else if let result = aggregateServers(servers) {
+            let counted = countedServers(servers)
+            document = result.0; cpu = result.1; connected = true
+            received = counted.compactMap(\.received).min()
+            latency = counted.reduce(0) { $0 + $1.latency } / Double(counted.count)
+            successfulSamples = counted.map(\.successfulSamples).min() ?? 0
+            raw = counted.count == 1 ? counted[0].raw : (try? JSONEncoder().encode(result.0)) ?? Data()
         } else {
-            connected = false
-            failures += 1
-            error = "SSH unavailable · retrying automatically"
+            document = nil; raw = Data(); received = nil
+            connected = false; cpu = CPUReading(previous: nil, current: nil); successfulSamples = 0
         }
-        onUpdate?()
-        if visible {
-            timer?.invalidate()
-            let delay = failures > 0 ? min(60, 5 * pow(2, Double(min(failures - 1, 4)))) : (document?.connectedAgents.isEmpty == false || successfulSamples < 2 ? 5.0 : 30.0)
-            timer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in self?.refresh() }
-            timer?.tolerance = delay * 0.1
+        error = connected ? "" : "SSH unavailable · retrying automatically"
+    }
+
+    private func schedule() {
+        guard visible else { return }
+        let active = servers.filter { $0.connection.active }
+        guard !active.isEmpty else { return }
+        let due = active.map { nextSample[$0.id] ?? Date() }.min() ?? Date()
+        let delay = max(1, min(60, due.timeIntervalSinceNow))
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
+            guard let self = self, self.process == nil else { return }
+            self.queue = self.servers.filter { $0.connection.active && (self.nextSample[$0.id] ?? .distantPast) <= Date() }.map(\.id)
+            self.sampleNext()
         }
+        timer?.tolerance = min(1, delay * 0.1)
     }
 
     func stop() {
-        visible = false
-        timer?.invalidate()
+        visible = false; queue.removeAll(); timer?.invalidate()
         if process?.isRunning == true { process?.terminate() }
-        // The shared SSH control master may also serve other agents; leave it intact.
+        // A shared SSH control master can also serve other agents.
     }
 }
 
@@ -198,7 +290,7 @@ private struct Dial: View {
     }
 }
 
-private struct Collapsible<Content: View>: View {
+struct Collapsible<Content: View>: View {
     let title: String
     let key: String
     let content: Content
@@ -229,7 +321,7 @@ private struct WidgetView: View {
     @AppStorage("atelier-language") private var language = "system"
     private var snapshot: VPSSnapshot? { monitor.document }
     private var tint: Color { monitor.connected ? Paint.green : .orange }
-    private var profile: String { Configuration.host + "." + (snapshot?.scope?.id ?? "owner") }
+    private var profile: String { (monitor.selectedID ?? "global") + "." + (snapshot?.scope?.id ?? "owner") }
     private var unit: String { L("GiB") }
 
     var body: some View {
@@ -249,6 +341,7 @@ private struct WidgetView: View {
             }.buttonStyle(.plain)
             HStack(spacing: 0) { Color(red: 0.20, green: 0.36, blue: 0.72); Paint.ivory; Paint.orange }
                 .frame(height: 2).clipShape(Capsule())
+            FleetPicker(monitor: monitor, admin: admin)
             if admin.authorized {
                 Picker(L("Widget section"), selection: $admin.showingManagement) {
                     Text(L("Monitoring")).tag(false)
@@ -285,6 +378,7 @@ private struct WidgetView: View {
                             Text(LF("Free: %@ %@", gib(snapshot?.workspace_free_bytes), unit)).foregroundColor(Paint.muted)
                         }.font(.system(size: 11)).frame(maxWidth: .infinity, alignment: .leading)
                     }
+                    if monitor.selectedID == nil { FleetServerList(monitor: monitor, admin: admin) }
                     if layout == .wide {
                         HStack(alignment: .top, spacing: 10) {
                             agentsSection.frame(maxWidth: .infinity)
@@ -321,7 +415,7 @@ private struct WidgetView: View {
                         snapshot?.agents.count ?? 0, snapshot?.pool?.max_jobs ?? 4)).foregroundColor(Paint.muted)
                     .help(L("An agent is connected while running a task or transferring files."))
                 if monitor.connected, let agents = snapshot?.connectedAgents, !agents.isEmpty {
-                    ForEach(agents) { agent in
+                    ForEach(agents, id: \.uiID) { agent in
                         HStack(alignment: .top, spacing: 7) {
                             Circle().fill(agent.orphaned == true ? .orange : Paint.green).frame(width: 7, height: 7).padding(.top, 3)
                             VStack(alignment: .leading, spacing: 3) {
@@ -344,7 +438,7 @@ private struct WidgetView: View {
         Collapsible("Transfers", key: profile + ".transfers") {
             VStack(alignment: .leading, spacing: 8) {
                 if let transfers = snapshot?.transfers, !transfers.isEmpty {
-                    ForEach(Array((transfers.filter { $0.status == "running" } + transfers.filter { $0.status != "running" }).prefix(4))) { transfer in
+                    ForEach(Array((transfers.filter { $0.status == "running" } + transfers.filter { $0.status != "running" }).prefix(4)), id: \.uiID) { transfer in
                         HStack(alignment: .top, spacing: 7) {
                             Image(systemName: transfer.direction == "upload" ? "arrow.up.right" : "arrow.down.left")
                                 .foregroundColor(transfer.status == "failed" ? .orange : Paint.green)
@@ -370,7 +464,7 @@ private struct WidgetView: View {
         Collapsible("History", key: profile + ".history") {
             VStack(alignment: .leading, spacing: 8) {
                 if let recent = snapshot?.recent, !recent.isEmpty {
-                    ForEach(Array(recent.prefix(3))) { entry in
+                    ForEach(Array(recent.prefix(3)), id: \.uiID) { entry in
                         if entry.status == "failed" {
                             Button { failures.open(entry) } label: { historyRow(entry) }
                                 .buttonStyle(.plain).help(L("Show failure details"))
@@ -497,7 +591,7 @@ private final class WidgetPanel: NSPanel {
 final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let monitor = Monitor()
     let administration = Administration(host: Configuration.adminHost)
-    let failures = FailureDetails(host: Configuration.host)
+    let failures = FailureDetails()
     private var panel: WidgetPanel!
     private var statusItem: NSStatusItem!
     private var capturing = false
@@ -546,15 +640,22 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         statusItem.button?.action = #selector(toggle)
         if UserDefaults.standard.bool(forKey: "atelier-mini"), !CommandLine.arguments.contains("--capture") { setCompact(true) }
         panel.orderFrontRegardless()
-        monitor.onUpdate = { [weak self] in self?.captureIfReady() }
+        monitor.onUpdate = { [weak self] in
+            guard let self = self else { return }
+            if self.administration.configure(self.monitor.administratorConnection) { self.administration.load() }
+            self.captureIfReady()
+        }
         failures.onUpdate = { [weak self] in self?.captureIfReady() }
+        failures.resolveConnection = { [weak self] activity in self?.monitor.target(for: activity) }
         administration.onUpdate = { [weak self] in self?.captureIfReady() }
         administration.onApplied = { [weak self] in self?.adminCheckApplied = true; self?.monitor.refresh() }
         monitor.refresh()
+        administration.configure(monitor.administratorConnection)
         administration.load()
         if CommandLine.arguments.contains("--capture") {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 45) { [weak self] in
-                if self?.capturing != true { fputs("Live widget capture did not receive two real SSH samples\n", stderr); exit(1) }
+            let deadline = CommandLine.arguments.contains("--capture-failure") ? 85.0 : 55.0
+            DispatchQueue.main.asyncAfter(deadline: .now() + deadline) { [weak self] in
+                if self?.capturing != true { fputs("Live widget capture timed out waiting for authenticated status or private details\n", stderr); exit(1) }
             }
         }
     }
@@ -868,7 +969,7 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 struct WidgetMain {
     static func main() {
         if CommandLine.arguments.contains("--self-test") {
-            do { try runModelChecks(); try runAdminChecks(); try runFailureChecks() } catch { fputs("Mac model checks failed: \(error)\n", stderr); exit(1) }
+            do { try runModelChecks(); try runFleetChecks(); try runAdminChecks(); try runFailureChecks() } catch { fputs("Mac model checks failed: \(error)\n", stderr); exit(1) }
             return
         }
         let application = NSApplication.shared

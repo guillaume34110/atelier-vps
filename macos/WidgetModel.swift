@@ -1,6 +1,6 @@
 import Foundation
 
-struct Activity: Decodable, Identifiable {
+struct Activity: Codable, Identifiable {
     let id: String
     let agent: String
     let project: String
@@ -15,6 +15,9 @@ struct Activity: Decodable, Identifiable {
     var bytes: Double? = nil
     var updated: Double? = nil
     var job: String? = nil
+    var connection: String? = nil
+    var uiID: String { (connection ?? "") + ":" + id }
+    func onServer(_ id: String) -> Self { var value = self; value.connection = id; return value }
 
     var transferRate: Double? {
         guard let bytes = bytes, let updated = updated, updated > started else { return nil }
@@ -36,23 +39,25 @@ struct Activity: Decodable, Identifiable {
     }
 }
 
-struct RAMAccounting: Decodable {
+struct RAMAccounting: Codable {
     let used_bytes: Double?
 }
 
-struct ResourcePool: Decodable {
+struct ResourcePool: Codable {
     let cpu_total: Int
     let cpu_reserved: Int
     let ram_reserved: Double
     let disk_reserved: Double
-    let active: [Activity]
+    var active: [Activity]
     let active_count: Int
     let max_jobs: Int
     var ram_available: Double? = nil
     var ram_accounting: RAMAccounting? = nil
+    var disk_available: Double? = nil
+    var ram_total: Double? = nil
 }
 
-struct Telemetry: Decodable {
+struct Telemetry: Codable {
     let sample_time: Double
     let arch: String?
     let cpu_count: Int?
@@ -64,8 +69,8 @@ struct Telemetry: Decodable {
     let worker_cpu_usec: Double?
     let system_disk_total: Double?
     let system_disk_free: Double?
-    let activity: [Activity]
-    let active: Activity?
+    var activity: [Activity]
+    var active: Activity?
     var worker_cpu_limit: Double? = nil
     var transfers: [Activity]? = nil
 }
@@ -80,12 +85,12 @@ enum WidgetLayout: String {
     }
 }
 
-struct UserScope: Decodable {
+struct UserScope: Codable {
     let id: String
     let mode: String
 }
 
-struct VPSSnapshot: Decodable {
+struct VPSSnapshot: Codable {
     let ok: Bool
     let busy: Bool
     let admit: Bool
@@ -95,10 +100,11 @@ struct VPSSnapshot: Decodable {
     let free_bytes: Double
     let reserve_bytes: Double
     let host_available_ram: Double
-    let telemetry: Telemetry?
-    let pool: ResourcePool?
+    var telemetry: Telemetry?
+    var pool: ResourcePool?
     var scope: UserScope? = nil
     var maintenance: Bool? = nil
+    var server_id: String? = nil
 
     static func decode(_ data: Data) throws -> VPSSnapshot {
         guard data.count <= 65536 else { throw MonitorError.invalidData }
@@ -138,11 +144,17 @@ struct VPSSnapshot: Decodable {
                       && ($0.ram_bytes ?? -1).isFinite && ($0.ram_bytes ?? -1) >= 0
                       && ($0.disk_bytes ?? -1).isFinite && ($0.disk_bytes ?? -1) >= 0 }) else { throw MonitorError.invalidData }
             guard pool.ram_available.map({ $0.isFinite && $0 >= 0 }) ?? true else { throw MonitorError.invalidData }
+            guard pool.disk_available.map({ $0.isFinite && $0 >= 0 }) ?? true,
+                  pool.ram_total.map({ $0.isFinite && $0 >= pool.ram_reserved + (pool.ram_available ?? 0) }) ?? true
+                  else { throw MonitorError.invalidData }
             guard pool.ram_accounting?.used_bytes.map({ $0.isFinite && $0 >= 0 }) ?? true else { throw MonitorError.invalidData }
         }
         if let scope = value.scope {
             guard scope.id.range(of: "^[a-z][a-z0-9-]{0,31}$", options: .regularExpression) != nil,
                   ["opportunistic", "allocated"].contains(scope.mode) else { throw MonitorError.invalidData }
+        }
+        if let identity = value.server_id {
+            guard identity.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil else { throw MonitorError.invalidData }
         }
         return value
     }
@@ -157,15 +169,29 @@ struct VPSSnapshot: Decodable {
     }
 
     var quotaFraction: Double { max(0, min(1, used_bytes / budget_bytes)) }
+    func onServer(_ id: String) -> Self {
+        var value = self
+        if var pool = value.pool {
+            pool.active = pool.active.map { $0.onServer(id) }; value.pool = pool
+        }
+        if var telemetry = value.telemetry {
+            telemetry.activity = telemetry.activity.map { $0.onServer(id) }
+            telemetry.active = telemetry.active?.onServer(id)
+            telemetry.transfers = telemetry.transfers?.map { $0.onServer(id) }
+            value.telemetry = telemetry
+        }
+        return value
+    }
+    var diskReservable: Double { pool?.disk_available ?? max(0, min(workspace_free_bytes, free_bytes - reserve_bytes) - (pool?.disk_reserved ?? 0)) }
     var agents: [Activity] { pool?.active ?? (busy ? telemetry?.active.map { [$0] } ?? [] : []) }
     var active: Activity? { agents.first }
     var transfers: [Activity] { telemetry?.transfers ?? [] }
     var activeTransfers: [Activity] { transfers.filter { $0.status == "running" } }
     var connectedAgents: [Activity] {
         var seen = Set<String>()
-        return (agents + activeTransfers).filter { seen.insert($0.job ?? $0.id).inserted }
+        return (agents + activeTransfers).filter { seen.insert(($0.connection ?? "") + ":" + ($0.job ?? $0.id)).inserted }
     }
-    var recent: [Activity] { (telemetry?.activity ?? []).filter { item in !agents.contains { $0.id == item.id } } }
+    var recent: [Activity] { (telemetry?.activity ?? []).filter { item in !agents.contains { $0.uiID == item.uiID } } }
 }
 
 enum MonitorError: Error { case invalidData, timeout, connection }
@@ -173,6 +199,8 @@ enum MonitorError: Error { case invalidData, timeout, connection }
 struct CPUReading {
     let host: Double?
     let worker: Double?
+
+    init(host: Double?, worker: Double?) { self.host = host; self.worker = worker }
 
     init(previous: Telemetry?, current: Telemetry?) {
         guard let old = previous, let new = current, new.sample_time > old.sample_time else {

@@ -13,10 +13,13 @@ Reserve a slice of CPU, RAM and disk. Learn memory peaks. Bring verified results
 <p align="center"><a href="docs/README.fr.md">Français</a> · <a href="docs/deployment.md">Server setup</a> · <a href="docs/integration.md">Agent integration</a> · <a href="docs/architecture.md">Resource sharing</a> · <a href="docs/widget.md">Mac widget</a></p>
 
 Atelier VPS moves compatible builds, tests and file processing off your laptop.
-Several agents can use one VPS at the same time, with atomic resource
+Several agents can share connected VPS servers, with atomic resource
 reservations and bounded jobs. Node, Python, Java, Chromium and native build
 utilities share one immutable toolchain. A small native Mac widget shows real
 analog CPU/RAM gauges, connected agents, transfers and timestamped activity.
+Its Global view adds your connected pools, then shows each server and team.
+Add servers with the widget or agent; join a team with a private one-use link.
+See [multiple servers and invitations](docs/fleet.md).
 
 No public worker port is required. The local client and MCP server use a
 restricted SSH gateway. Your credentials stay in your own SSH configuration.
@@ -24,7 +27,7 @@ restricted SSH gateway. Your credentials stay in your own SSH configuration.
 ## Get started
 
 First deploy your **own VPS** using the [server guide](docs/deployment.md), or ask
-its operator for a restricted SSH alias. The maintainer's infrastructure is not
+its operator for an invitation or a restricted SSH alias. The maintainer's infrastructure is not
 a hosted service for public use.
 
 ```sh

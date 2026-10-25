@@ -4,15 +4,18 @@ from unittest.mock import patch
 
 from mcp import Client
 import mcp_server
+from test_fleet import state
 
 
 class MCPTests(unittest.IsolatedAsyncioTestCase):
     async def test_real_protocol_lists_tools_and_queries_restricted_gateway(self):
-        with patch.object(mcp_server.vps, 'transport', return_value=(0, b'{"ok":true,"admit":true}')) as transport:
+        profile={'id':'test','name':'Test','team':'Test','ssh_host':'test-worker','enabled':True,'managed':False}
+        with patch.object(mcp_server.vps, 'transport', return_value=(0, json.dumps(state()).encode())) as transport, patch.object(mcp_server.client_config,'active_connections',return_value=[profile]):
             async with Client(mcp_server.server) as client:
                 tools = await client.list_tools()
                 self.assertEqual({t.name for t in tools.tools}, {'vps_status', 'vps_run', 'vps_fetch', 'vps_release',
-                    'admin_settings_get', 'admin_settings_preview', 'admin_settings_apply'})
+                    'admin_settings_get', 'admin_settings_preview', 'admin_settings_apply', 'admin_invitation_create',
+                    'vps_server_add','vps_connect_from_clipboard'})
                 result = await client.call_tool('vps_status')
                 self.assertFalse(result.is_error)
                 self.assertTrue(result.structured_content['ok'])
@@ -29,7 +32,7 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
                 transport.assert_not_called()
 
     async def test_admin_tools_require_separate_authenticated_alias(self):
-        with patch.object(mcp_server.client_config, 'admin_host', side_effect=PermissionError('administrator required')), patch.object(mcp_server.vps, 'transport') as transport:
+        with patch.object(mcp_server.client_config, 'active_connections', return_value=[{'id':'test','ssh_host':'test-worker'}]), patch.object(mcp_server.vps, 'transport') as transport:
             async with Client(mcp_server.server) as client:
                 result = await client.call_tool('admin_settings_get')
                 self.assertTrue(result.is_error)
