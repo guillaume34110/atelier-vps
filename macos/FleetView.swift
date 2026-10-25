@@ -71,7 +71,8 @@ final class ConnectionEditor: ObservableObject {
     @Published var busy = false
     @Published var error: String?
 
-    func save(arguments: [String], input: Data = Data(), failed: ((String) -> Void)? = nil, completion: @escaping () -> Void) {
+    func save(arguments: [String], input: Data = Data(), received: ((Data) -> Void)? = nil,
+              failed: ((String) -> Void)? = nil, completion: @escaping () -> Void) {
         guard !busy else { return }
         let launcher = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/bin/atelier-vps")
         guard FileManager.default.isExecutableFile(atPath: launcher.path), input.count <= 8193 else {
@@ -85,7 +86,7 @@ final class ConnectionEditor: ObservableObject {
             DispatchQueue.main.async { [weak self] in
                 self?.busy = false
                 switch result {
-                case .success: completion()
+                case .success(let data): received?(data); completion()
                 case .failure:
                     let message = L("Connection failed. Check the invitation or SSH alias and retry. Existing connections were preserved.")
                     self?.error = message; failed?(message)

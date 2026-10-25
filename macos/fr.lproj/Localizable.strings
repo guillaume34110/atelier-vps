@@ -169,3 +169,31 @@
 "RAM %@ / %@ %@ reserved · %d tasks" = "RAM %@ / %@ %@ réservés · %d calculs";
 "Storage %@ / %@ %@" = "Disque %@ / %@ %@";
 "CPU reserved %.0f vCPU · RAM limit %@ %@" = "CPU engagé %.0f vCPU · plafond RAM %@ %@";
+
+"Your programs run on the VPS. Sign in to your account inside the remote desktop." = "Les programmes tournent sur le VPS. Connecte-toi à ton compte dans le bureau distant.";
+
+"Desktop unavailable. Check the available resources and server version." = "Bureau indisponible. Vérifie les ressources disponibles et la version du serveur.";
+
+"Close the current screen-sharing window before opening another server." = "Ferme la fenêtre distante actuelle avant d’ouvrir un autre serveur.";
+
+"Cowork Pro/Max computes in Anthropic's cloud. The VPS desktop connects your VPS files. Local Cowork requires KVM." = "Cowork Pro/Max calcule chez Anthropic. Le bureau du VPS donne accès à tes fichiers sur le VPS. Cowork local exige KVM.";
+
+"Close the remote desktop?" = "Fermer le bureau distant ?";
+
+"Close desktop" = "Fermer le bureau";
+
+"Finish its tasks before closing. Your profile and files stay on the VPS." = "Termine ses tâches avant de fermer. Ton profil et tes fichiers restent sur le VPS.";
+
+"Session until %@" = "Session jusqu’à %@";
+
+"Install the agents update on this server." = "Installe la mise à jour Agents sur ce serveur.";
+
+"Open remote desktop" = "Ouvrir le bureau distant";
+
+"Preparing the VPS programs…" = "Préparation des programmes sur le VPS…";
+
+"Start a one-hour desktop" = "Ouvrir un bureau pour une heure";
+
+"Uses a reserved share of the pool. Profiles and files persist; managed tools expire after 30 unused days." = "Utilise une part réservée du pool. Profils et fichiers conservés ; les outils gérés expirent après 30 jours sans utilisation.";
+
+"Agents" = "Agents";

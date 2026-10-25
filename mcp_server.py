@@ -50,6 +50,31 @@ def vps_server_add(identifier: str, name: str, team: str, ssh_alias: str,
 
 
 @server.tool(structured_output=True)
+def vps_agent_desktop(action: str = 'status', server: str | None = None,
+                      session_id: str | None = None, confirmed_stop: bool = False,
+                      provider: str = 'chatgpt', ram_gib: float | None = None) -> dict[str, Any]:
+    """Control the reserved VPS desktop containing official Codex and Claude programs.
+
+    Actions: status, start, stop. Start reserves a one-hour session in the normal
+    pool. Open it from the widget's Agents tab and sign in there with the user's
+    provider account; no inference API key is needed. Never return a viewer
+    password or authentication code to the conversation. Stop requires explicit
+    confirmation that its tasks are finished; profiles and files are preserved.
+    Omit RAM to reuse measured peaks. An explicit known workload peak is allowed;
+    never shrink a reservation merely to fit a refusal or add a 2x margin.
+    """
+    if action not in {'status', 'start', 'stop'} or action == 'stop' and not confirmed_stop:
+        raise ValueError('use status/start, or confirm the finished desktop before stopping it')
+    import desktop_client
+    profile, result = desktop_client.request(server, action, session_id, provider, ram_gib)
+    allowed = {'available', 'active', 'id', 'provider', 'phase', 'started', 'expires', 'ram_bytes', 'disk_bytes', 'stopping'}
+    value = {'server': profile['id'], **{key: result[key] for key in allowed if key in result}}
+    if result.get('id'):
+        value['job_ref'] = profile['id'] + ':' + result['id']
+    return value
+
+
+@server.tool(structured_output=True)
 def vps_connect_from_clipboard() -> dict[str, Any]:
     """Accept the invitation explicitly copied by the user, without echoing it.
 

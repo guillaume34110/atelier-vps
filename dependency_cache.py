@@ -12,10 +12,14 @@ import resources
 RETENTION_SECONDS = 30 * 86400
 
 
-def scope(root, request):
-    # Commands sharing a project/lockfile reuse downloads, including failed retries.
+def scope_path(root, request):
     key = hashlib.sha256(json.dumps([request.get('project'), request.get('dependency_digest')],
                                    sort_keys=True).encode()).hexdigest()
+    return root / 'cache' / 'managed' / key
+
+
+def scope(root, request):
+    # Commands sharing a project/lockfile reuse downloads, including failed retries.
     base = root / 'cache'
     if base.is_symlink():
         raise ValueError('unsafe dependency cache')
@@ -24,7 +28,7 @@ def scope(root, request):
     if managed.is_symlink():
         raise ValueError('unsafe dependency cache')
     managed.mkdir(exist_ok=True)
-    path = managed / key
+    path = scope_path(root, request)
     if path.is_symlink():
         raise ValueError('unsafe dependency cache')
     path.mkdir(exist_ok=True)

@@ -20,7 +20,7 @@ import client_config
 
 SKIP = {".git", "node_modules", ".venv", "venv", ".cache", "__pycache__",
         "output", "dist", "build", ".next", "coverage", "CLAUDE.md", ".ssh",
-        ".config", ".codex", ".claude", ".agents",
+        ".config", ".codex", ".claude", ".agents", ".desktops", ".agent-auth",
         ".npmrc", ".pypirc", ".netrc", ".aws", ".kube", ".DS_Store"}
 SKIP.update({'deployment.local.json', 'docker-compose.local.yaml', 'auth.json', 'credentials.json'})
 
@@ -398,6 +398,11 @@ def main():
     settings.add_argument('operation', choices=['get', 'preview', 'apply'])
     settings.add_argument('--policy', type=Path)
     settings.add_argument('--expected-revision')
+    desktop = commands.add_parser('desktop', help='reserved VPS programs and private system screen sharing')
+    desktop.add_argument('operation', choices=['status', 'start', 'open', 'stop'])
+    desktop.add_argument('--id')
+    desktop.add_argument('--provider', choices=['chatgpt', 'claude'], default='chatgpt')
+    desktop.add_argument('--ram-gib', default='auto', help='auto, or an explicit RAM peak for a known workload')
     run = commands.add_parser("run")
     run.add_argument("--source", type=Path, required=True)
     run.add_argument("--timeout", type=int, default=1800)
@@ -416,6 +421,17 @@ def main():
     args = parser.parse_args()
     if args.host and args.server:
         parser.error('choose --host or --server')
+    if args.action == 'desktop':
+        if args.host:
+            parser.error('use a saved --server connection for remote desktop controls')
+        import desktop_client
+        if args.operation == 'open':
+            desktop_client.open_desktop(args.server, args.id)
+        else:
+            ram = None if args.ram_gib == 'auto' else float(args.ram_gib)
+            _, result = desktop_client.request(args.server, args.operation, args.id, args.provider, ram)
+            print(json.dumps(result))
+        return 0
     if args.action == 'invitations':
         import onboarding
         result = onboarding.deliver_invitation(args.member, args.server, args.expected_revision, clipboard=args.clipboard)

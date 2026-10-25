@@ -16,7 +16,8 @@ import uuid
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 import vps
-from ops.gateway import WORKER_EXEC
+from scripts import desktop_checks
+from ops.gateway import WORKER_EXEC, DESKTOP_TMPFS
 
 
 def command(argv, **kwargs):
@@ -91,7 +92,8 @@ def main():
     command(["docker", "build", "-t", "usevps:checks", "."], cwd=REPO)
     image = json.loads(command(['docker', 'image', 'inspect', 'usevps:checks']))[0]['Id']
     print("Container build: passed", flush=True)
-    workspace = Path(tempfile.mkdtemp(prefix="container-", dir=root)) if local else volume / ('.usevps-qa-' + uuid.uuid4().hex)
+    workspace = (Path(tempfile.mkdtemp(prefix="container-", dir=root)) if local else
+                 Path(deployment['workspace']) / ('.usevps-qa-' + uuid.uuid4().hex))
     capacity = Path(tempfile.mkdtemp(prefix="capacity-", dir=root)) if local else volume / '.usevps-stat'
     if local:
         capacity.chmod(0o000)
@@ -99,6 +101,7 @@ def main():
         (workspace / ".volume-id").write_text("ci-volume\n")
     else:
         setup = ("from pathlib import Path; import os; p=Path(" + repr(str(workspace)) + "); "
+                 "assert (p.parent/'.volume-id').read_text().strip()==" + repr(deployment['volume_id']) + "; "
                  "assert os.statvfs(p.parent).f_bavail*os.statvfs(p.parent).f_frsize > 1024**3; "
                  "p.mkdir(mode=0o777); p.chmod(0o777); (p/'.volume-id').write_text('ci-volume')")
         command(["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", remote_host, "python3", "-"], input=setup.encode())
@@ -106,10 +109,13 @@ def main():
     process = None
     evidence = root / "evidence"
     evidence.mkdir(exist_ok=True)
+    desktop_cache = {}
+    complete = False
     try:
         process = subprocess.Popen(["docker", "run", "--rm", "--name", name, "--read-only",
-                                    "--cap-drop=ALL", "--security-opt=no-new-privileges:true", "--memory=2g",
-                                    "--memory-swap=2g", "--pids-limit=256", "--cpus=2", *mounts,
+                                    "--tmpfs", '/tmp:' + DESKTOP_TMPFS,
+                                    "--cap-drop=ALL", "--security-opt=no-new-privileges:true", "--memory=3g",
+                                    "--memory-swap=3g", "--pids-limit=512", "--cpus=2", "--cpu-shares=128", *mounts,
                                     "--publish", "127.0.0.1::8080", "--volume", str(workspace) + ":/workspace",
                                     "--volume", str(capacity) + ":/volume-stat:ro", "--env", "USEVPS_VOLUME_STATS=/volume-stat",
                                     "--env", "USEVPS_VOLUME_ID=ci-volume", image],
@@ -138,6 +144,9 @@ def main():
         cpu_env = {**os.environ, 'USEVPS_CPU_QUOTA': '50000', 'USEVPS_CPU_LIMIT': '0.5'}
         spec = json.loads(command(['docker', 'compose', '-f', 'docker-compose.yaml', 'config', '--format', 'json'],
                                   cwd=REPO, env=cpu_env))['services']['worker']
+        assert spec['tmpfs'] == ['/tmp:' + DESKTOP_TMPFS], spec['tmpfs']
+        assert info['HostConfig']['Tmpfs'] == {'/tmp': DESKTOP_TMPFS}
+        assert spec['pids_limit'] == info['HostConfig']['PidsLimit'] == 512
         assert spec['cpu_period'] == 100000 and spec['cpu_quota'] == 50000
         cpu_name = 'usevps-cpu-spec-' + uuid.uuid4().hex[:10]
         spec.pop('build', None)
@@ -169,9 +178,9 @@ def main():
         assert capacity_status["admit"] and capacity_status["workspace_free_bytes"] > 0, capacity_status
         metrics = capacity_status['telemetry']
         assert metrics['cpu_total'] > 0 and metrics['host_total_ram'] > 0, metrics
-        assert metrics['worker_ram_limit'] == 2 * 1024 ** 3 and metrics['worker_ram'] > 0, metrics
+        assert metrics['worker_ram_limit'] == 3 * 1024 ** 3 and metrics['worker_ram'] > 0, metrics
         task = json.loads(execute(name, "run", payload(["python3", "-c",
-                           "from pathlib import Path; assert Path('/proc/self/oom_score_adj').read_text().strip()=='500'; Path('result.txt').write_text(str(int(Path('input.txt').read_text())*2))"],
+                           "from pathlib import Path; import os,tempfile; assert Path('/proc/self/oom_score_adj').read_text().strip()=='500'; assert Path('/tmp').stat().st_uid==os.getuid(); s=os.statvfs('/tmp'); assert s.f_blocks*s.f_frsize==8388608; f=tempfile.TemporaryFile(dir='/tmp'); f.write(b'ok'); f.close(); Path('result.txt').write_text(str(int(Path('input.txt').read_text())*2))"],
                            agent='CI · transfert vérifié', project='usevps')))
         assert task["status"] == "passed", task
         recent = json.loads(execute(name, 'status'))['telemetry']['activity'][0]
@@ -342,6 +351,8 @@ def main():
         checked_guard = json.loads(execute(name, "run", payload(["rtk", "proxy", "python3", "/app/storage-guard.py", "--volume", ".", "--require-gib", "0.001"])))
         assert checked_guard["status"] == "passed", checked_guard
         execute(name, "release", json.dumps({"id": checked_guard["id"]}).encode() + b"\n")
+        desktop_checks.verify_desktops(root, name, workspace, deployment, remote_host if remote else None,
+                                       command, execute, desktop_cache)
         from team_checks import verify_team_isolation
         verify_team_isolation(root, dev, remote_host if remote else None, volume, command, execute, payload, image)
         print('Separate developers: private files, hard quota, CPU cap and neighboring OOM survival passed', flush=True)
@@ -350,6 +361,7 @@ def main():
         print('Real SSH enrollment: one use, host pin, preserved primary access and forced commands passed', flush=True)
         shutil.rmtree(dest)
         archive.unlink()
+        complete = True
     finally:
         subprocess.run(["docker", "stop", "--time", "5", name], capture_output=True, timeout=15)
         if process:
@@ -367,6 +379,14 @@ def main():
                         pass
                 process.terminate()
                 process.communicate(timeout=10)
+        if remote and desktop_cache:
+            desktop_checks.relocate_cache(desktop_cache, workspace, Path(deployment['workspace']),
+                                           remote_host, command, restore=True)
+        if not complete:
+            (evidence / 'preserved-fixture.json').write_text(json.dumps({'workspace': str(workspace),
+                'container': name, 'reason': 'complete suite failed; preserve owned fixture data for diagnosis'}, indent=2))
+            print('Owned failed fixture preserved for diagnosis: ' + str(workspace), flush=True)
+            raise RuntimeError('Complete suite failed; its owned fixture was preserved for diagnosis')
         if local:
             cleanup_work = "import pathlib,shutil,sys; p=pathlib.Path(sys.argv[1]); assert p.name.startswith('container-') and (p/'.volume-id').read_text().strip()=='ci-volume'; shutil.rmtree(p)"
             command([*( ["sudo", "-n"] if os.geteuid() else []), sys.executable, "-c", cleanup_work, str(workspace)])

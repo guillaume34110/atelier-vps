@@ -41,7 +41,9 @@ probe=m/'probe';probe.mkdir();probe.chmod(0)
                                     '/lib64': 'usr/lib64', '/etc': 'etc', '/opt': 'opt'}.items():
             mounts.extend(['--volume', str(dev / source) + ':' + destination + ':ro'])
         for label, name in zip(['alice', 'bob'], names):
+            from ops.gateway import DESKTOP_TMPFS
             command(['docker', 'run', '--detach', '--name', name, '--network=none', '--read-only',
+                     '--tmpfs', '/tmp:' + DESKTOP_TMPFS,
                      '--cap-drop=ALL', '--security-opt=no-new-privileges:true', '--memory=128m',
                      '--memory-swap=128m', '--cpus=0.5', '--pids-limit=64', *mounts,
                      '--volume', str(base / 'volume' / label) + ':/workspace',

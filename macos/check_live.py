@@ -55,6 +55,7 @@ def main():
     if args.layouts:
         layouts = json.loads((root / 'widget-layouts.json').read_text())
         names = {item['layout'] for item in layouts}
+        assert {'agents-narrow', 'agents-wide'} <= names
         assert {'narrow', 'standard', 'wide', 'short', 'mini-small', 'mini', 'mini-wide'} <= names
         assert {'compact-edge', 'standard-edge', 'column-before', 'column-after', 'auto-mini', 'auto-full'} <= names
         if result['administrator_authenticated']:
@@ -65,7 +66,7 @@ def main():
             assert item['mini'] == (item['height'] < 220)
             expected = 'mini' if item['height'] < 220 else 'compact' if item['width'] < 440 else 'standard' if item['width'] < 700 else 'wide'
             assert item['resolved_layout'] == expected
-            if not item['mini'] and not item['management'] and item['height'] >= 500:
+            if not item['mini'] and not item['management'] and not item.get('agents') and item['height'] >= 500:
                 assert item['meter_face_pixels'] >= 1000
     if args.admin:
         assert result['administrator_roundtrip_verified'] is True
