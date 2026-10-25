@@ -67,11 +67,11 @@ struct FailureReport: Decodable {
     }
 }
 
-func boundedPrivateOutput(_ task: Process, input: Data, limit: Int) throws -> Data {
+func boundedPrivateOutput(_ task: Process, input: Data, limit: Int, timeout: Double = 30) throws -> Data {
     let source = Pipe(), output = Pipe()
     task.standardInput = source; task.standardOutput = output; task.standardError = FileHandle.nullDevice
     try task.run()
-    DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 30) { [weak task] in
+    DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout) { [weak task] in
         guard let task = task, task.isRunning else { return }
         task.terminate()
         DispatchQueue.global().asyncAfter(deadline: .now() + 1) { [weak task] in

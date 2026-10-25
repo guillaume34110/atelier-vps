@@ -23,7 +23,7 @@ def probe():
         'group': 'root:x:0:\nsshd:x:74:\n',
         'shadow': 'root:!:19000:0:99999:7:::\nsshd:!:19000:0:99999:7:::\n',
         'gshadow': 'root:!::\nsshd:!::\n', 'nsswitch.conf': 'passwd: files\ngroup: files\nshadow: files\nhosts: files\n',
-        'hosts': '127.0.0.1 localhost\n', 'machine-id': 'a' * 32 + '\n',
+        'machine-id': 'a' * 32 + '\n',
         'login.defs': 'UID_MIN 1000\nUID_MAX 60000\nGID_MIN 1000\nGID_MAX 60000\nUSERGROUPS_ENAB yes\n',
         'sudoers': 'root ALL=(ALL:ALL) ALL\n@includedir /etc/sudoers.d\n',
     }.items():
@@ -45,7 +45,7 @@ def probe():
     config = Path('/etc/ssh/sshd_config')
     config.write_text('Port 2222\nListenAddress 127.0.0.1\nHostKey /tmp/keys/host\n'
                       'UsePAM no\nPasswordAuthentication no\nKbdInteractiveAuthentication no\n'
-                      'PubkeyAuthentication yes\nPermitRootLogin no\nPidFile /run/test-sshd.pid\nLogLevel ERROR\n')
+                      'PubkeyAuthentication yes\nAllowUsers root usevps avps-admin\nPermitRootLogin no\nPidFile /run/test-sshd.pid\nLogLevel ERROR\n')
     pool = {'cpus': 4, 'ram_bytes': 5 * team.GIB, 'disk_bytes': 20 * team.GIB, 'slots': 4}
     policy = {'mode': 'opportunistic', 'pool': pool, 'users': [
         {'id': 'owner', 'cpu_percent': 100, 'ram_percent': 100, 'disk_percent': 100, 'slots': 4}]}

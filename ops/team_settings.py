@@ -25,6 +25,7 @@ except ImportError:
 STATE = Path('/etc/atelier-vps-team.json')
 BASE = Path('/etc/usevps-gateway.json')
 PENDING = Path('/etc/atelier-vps-team.pending.json')
+LOCK = Path('/etc/atelier-vps-team.lock')
 
 
 def command(args, **kwargs):
@@ -334,7 +335,7 @@ def main():
     identity = server_identity()
     if request.get('expected_server_id') is not None and request['expected_server_id'] != identity:
         raise PermissionError('administrator identity belongs to another server')
-    with Path('/etc/atelier-vps-team.lock').open('a') as lock:
+    with LOCK.open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         state = read(STATE)
         if request['action'] == 'get':

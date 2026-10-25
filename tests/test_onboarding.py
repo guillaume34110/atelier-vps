@@ -102,6 +102,18 @@ class Onboarding(unittest.TestCase):
                 'password':'z'*43, 'expires':int(time.time())+1800,
                 'member':'camille', 'user':'avps-camille', 'server_id':'a'*64}
 
+    def test_register_alias_authenticates_developer_and_separate_administrator(self):
+        for user in ['root','ubuntu','avps-admin']:
+            with self.subTest(user=user), patch.object(join,'bounded_output',return_value=('user '+user+'\n').encode()), patch.object(join,'status') as status:
+                with self.assertRaises(PermissionError): join.add_alias('paris','Paris','Paris','paris-worker')
+                status.assert_not_called()
+        with patch.object(join,'bounded_output',return_value=b'user avps-camille\n'), patch.object(join,'status',return_value=self.state()) as status:
+            row=join.add_alias('paris','Paris','Paris','paris-worker')
+            self.assertEqual(row['server_id'],'a'*64)
+            self.assertEqual(status.call_args.args[1][-2:],['-S','none'])
+            with patch('vps.json_request',return_value=(1,{'server_id':'a'*64})), self.assertRaises(PermissionError):
+                join.add_alias('lyon','Lyon','Lyon','lyon-worker','lyon-admin')
+
     def test_one_paste_enrolls_only_public_material_with_a_pinned_host(self):
         payload=self.join_payload()
         receipt={'enrolled':True,'member':'camille','server_id':'a'*64,'public_key':self.device['public_key']}

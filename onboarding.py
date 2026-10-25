@@ -149,16 +149,16 @@ def add_alias(identifier, name, team, alias, admin_alias=None):
     options=config.ssh_options(alias)
     details=bounded_output(['ssh',*options,'-G',alias]).decode().splitlines()
     details=dict(line.split(' ',1) for line in details if ' ' in line)
-    if details.get('user') in {'root','avps-admin','admin'}:
+    if not re.fullmatch(r'(usevps|avps-(?!admin$)[a-z][a-z0-9-]{0,15})', details.get('user', '')):
         raise PermissionError('ordinary work requires a restricted developer SSH account')
-    state = status(alias, options)
+    state = status(alias, [*options, '-S', 'none'])
     row['scope'] = state.get('scope', {}).get('id', 'owner')
     if state.get('server_id'):
         row['server_id'] = state['server_id']
     if admin_alias:
         import vps
-        _,admin=vps.json_request(admin_alias,'settings',{'action':'get'})
-        if not state.get('server_id') or admin.get('server_id')!=state['server_id']:
+        rc,admin=vps.json_request(admin_alias,'settings',{'action':'get'})
+        if rc or not state.get('server_id') or admin.get('server_id')!=state['server_id']:
             raise PermissionError('update the worker and administrator gateway before binding this administrator')
     return config.save_connection(row)
 

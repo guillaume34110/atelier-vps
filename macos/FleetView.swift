@@ -81,7 +81,7 @@ final class ConnectionEditor: ObservableObject {
         busy = true; error = nil
         let task = Process(); task.executableURL = launcher; task.arguments = arguments
         DispatchQueue.global(qos: .utility).async {
-            let result = Result { try boundedPrivateOutput(task, input: input, limit: 65536) }
+            let result = Result { try boundedPrivateOutput(task, input: input, limit: 65536, timeout: 120) }
             DispatchQueue.main.async { [weak self] in
                 self?.busy = false
                 switch result {

@@ -27,7 +27,7 @@ def main():
     subprocess.run([str(binary), '--capture', str(image), '--exercise-controls', '--exit-after-capture',
                     *(['--capture-layouts'] if args.layouts else []), *(['--exercise-admin'] if args.admin else []),
                     *(['--capture-failure'] if args.failure else []),
-                    *(['--failure-id',args.failure_id] if args.failure_id else [])], check=True, timeout=75)
+                    *(['--failure-id',args.failure_id] if args.failure_id else [])], check=True, timeout=100)
     result = json.loads(image.with_suffix('.json').read_text())
     assert image.read_bytes().startswith(b'\x89PNG\r\n\x1a\n')
     if args.failure:

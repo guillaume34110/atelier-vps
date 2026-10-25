@@ -327,7 +327,7 @@ def admin_request(action, server=None, **request):
     if rc or current.get('server_id') != identity:
         raise PermissionError('administrator authentication or server identity mismatch')
     if action=='get':return current
-    rc, result = json_request(alias,'settings',{'action':action,**expected,**request},timeout=120)
+    rc, result = json_request(alias,'settings',{'action':action,**expected,**request},timeout=1500 if action == 'apply' else 120)
     if rc:
         raise RuntimeError('administrator request refused; reload settings and check active work')
     return result

@@ -185,7 +185,7 @@ def main():
         if not isinstance(request, dict) or set(request) != {'public_key'}:
             raise ValueError('only a public device key is accepted')
         import fcntl
-        with Path('/etc/atelier-vps-team.lock').open('a') as lock:
+        with settings.LOCK.open('a') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             print(json.dumps(enroll(os.environ.get('SUDO_USER', ''), request['public_key'])))
     finally:

@@ -97,3 +97,20 @@ lecture seule dans l'image, à `/app/AGENTS.md`.
   `ops/deploy_lock.py --hold` et le garder au premier plan jusqu'à la validation
   du nouveau service, puis envoyer `release`. Un refus du verrou bloque le
   déploiement ; ne jamais interrompre un calcul actif pour installer une mise à jour.
+- Le registre privé `connections.json` est partagé par CLI, MCP et widget. Une
+  équipe correspond à un serveur ; Global additionne les pools authentifiés
+  accessibles, sans doublons physiques ni mesures de plus de 60 secondes.
+  Une tâche complète tient sur un seul serveur compatible : consulter son plan
+  RAM et son admission, garder ses réservations, ne pas relancer arbitrairement
+  une commande exécutée. Conserver les références `connexion:identifiant` pour
+  récupérer et libérer les résultats sur leur serveur d'origine.
+- Les invitations privées expirent après 30 minutes et inscrivent un appareil.
+  La clé privée reste sur cet appareil ; seule sa clé publique est transmise.
+  Ne jamais lire ou publier le lien dans un chat, journal ou dépôt. Les comptes
+  temporaires n'ont ni shell, ni transfert de ports, ni espace de calcul. Garder
+  les clés existantes ; les identités administrateur restent distinctes.
+- La mise à jour des helpers communs exige le verrou canonique du propriétaire,
+  le verrou de réglages et tous les autres workers au repos sous leurs verrous.
+  L'installation SSH compare les règles des accès existants avant rechargement.
+  La recette complète inclut une vraie authentification SSH isolée : mauvais
+  hôte refusé, ancien accès conservé, réutilisation du lien et shell refusés.

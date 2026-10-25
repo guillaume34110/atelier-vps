@@ -14,6 +14,7 @@ MAIN = Path('/etc/ssh/sshd_config')
 TAIL = '\n# Atelier VPS enrollment (dedicated group only)\nMatch all\nInclude ' + str(CONFIG) + '\n'
 CONFIG_TEXT = f'''# Managed by Atelier VPS: temporary enrollment identities only.
 Match Group {invites.GROUP}
+    AllowUsers avpi-*
     AuthenticationMethods password
     PasswordAuthentication yes
     KbdInteractiveAuthentication no
@@ -35,7 +36,7 @@ def policy(user):
 
 def verify(user):
     current = policy(user)
-    expected = {'authenticationmethods': 'password', 'passwordauthentication': 'yes',
+    expected = {'allowusers': 'avpi-*', 'authenticationmethods': 'password', 'passwordauthentication': 'yes',
                 'pubkeyauthentication': 'no', 'kbdinteractiveauthentication': 'no',
                 'forcecommand': invites.ENTRY, 'disableforwarding': 'yes', 'permittty': 'no',
                 'permittunnel': 'no', 'permituserrc': 'no', 'x11forwarding': 'no', 'maxauthtries': '2'}
@@ -62,6 +63,8 @@ def install():
         raise ValueError('unexpected account in the enrollment group')
     state = settings.read(settings.STATE) if settings.STATE.exists() else {'tenants': {}}
     users = {'root', 'usevps', 'avps-admin'} | {t['ssh_user'] for t in state['tenants'].values()}
+    users |= {p.pw_name for p in pwd.getpwall() if p.pw_shell not in {invites.ENTRY, '/bin/false', '/usr/bin/false'}
+              and not p.pw_shell.endswith('/nologin')}
     before = {user: policy(user) for user in users}
     previous = None
     if MAIN.is_symlink() or MAIN.stat().st_uid != 0 or MAIN.stat().st_mode & 0o022:

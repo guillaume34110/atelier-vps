@@ -125,7 +125,7 @@ final class Monitor: ObservableObject {
         let started = ProcessInfo.processInfo.systemUptime
         do { try task.run() }
         catch { process = nil; finish(nil, started: started, connection: connection); return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 12) { [weak self, weak task] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self, weak task] in
             guard let task = task, self?.process === task, task.isRunning else { return }
             task.terminate()
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak task] in
@@ -653,8 +653,9 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         administration.configure(monitor.administratorConnection)
         administration.load()
         if CommandLine.arguments.contains("--capture") {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 45) { [weak self] in
-                if self?.capturing != true { fputs("Live widget capture did not receive two real SSH samples\n", stderr); exit(1) }
+            let deadline = CommandLine.arguments.contains("--capture-failure") ? 85.0 : 55.0
+            DispatchQueue.main.asyncAfter(deadline: .now() + deadline) { [weak self] in
+                if self?.capturing != true { fputs("Live widget capture timed out waiting for authenticated status or private details\n", stderr); exit(1) }
             }
         }
     }
