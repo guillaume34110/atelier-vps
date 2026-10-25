@@ -184,8 +184,42 @@ def main():
         dest = root / ("result-" + name)
         assert vps.unpack_result(archive, dest) == 2
         assert (dest / "work/result.txt").read_text() == "42"
+        transfers = json.loads(execute(name, 'status'))['telemetry']['transfers']
+        upload = next(x for x in transfers if x.get('job') == task['id'] and x['direction'] == 'upload')
+        download = next(x for x in transfers if x.get('job') == task['id'] and x['direction'] == 'download')
+        assert upload['status'] == download['status'] == 'passed' and upload['bytes'] > 0, transfers
+        assert download['bytes'] == len(data) and download['agent'] == 'CI · transfert vérifié', transfers
+        assert all('argv' not in transfer for transfer in transfers), transfers
+        (evidence / 'transfer-proof.json').write_text(json.dumps(transfers))
         print("Running service + input/process/result SHA256 round trip: passed", flush=True)
         execute(name, "release", json.dumps({"id": task["id"]}).encode() + b"\n")
+        slow = subprocess.Popen(['docker', 'exec', '-i', '--user', '10001:10001', name, *WORKER_EXEC, 'run'],
+                                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        body = payload(['true'], files={'large.txt': 'x' * 128 * 1024}, agent='CI · sources en cours', ram_bytes=128 * 1024**2)
+        try:
+            slow.stdin.write(body[:10240]); slow.stdin.flush()
+            pending = None
+            for _ in range(30):
+                state = json.loads(execute(name, 'status'))
+                pending = next((x for x in state['telemetry']['transfers'] if x['status'] == 'running' and x['agent'] == 'CI · sources en cours'), None)
+                if pending:
+                    break
+                time.sleep(0.1)
+            assert pending is not None, state
+            # Expired caches cannot be removed while even an upload owns a lease.
+            guard = "from pathlib import Path; import dependency_cache as c, resources; p=c.scope(Path('/workspace'), {'project':'expired-fixture'}); resources.write_json(p/'.retention.json', {'version':1,'last_used':0}); c.maintain(Path('/workspace')); assert p.exists()"
+            command(['docker', 'exec', '--user', '10001:10001', name, 'python3', '-c', guard])
+            slow.stdin.write(body[10240:]); slow.stdin.close(); slow.stdin = None
+            out, errors = slow.communicate(timeout=60)
+            assert slow.returncode == 0, errors[-1000:]
+            completed = json.loads(out)
+            execute(name, 'release', json.dumps({'id': completed['id']}).encode() + b'\n')
+            clean = "from pathlib import Path; import dependency_cache as c; root=Path('/workspace'); before=list((root/'cache/managed').iterdir()); old=[p for p in before if c.last_used(p)==0]; assert len(old)==1; c.maintain(root); assert not old[0].exists(); assert all(p.exists() for p in before if p not in old); assert c.status(root)['removed_scopes']==1"
+            command(['docker', 'exec', '--user', '10001:10001', name, 'python3', '-c', clean])
+        finally:
+            if slow.poll() is None:
+                slow.terminate(); slow.wait(timeout=10)
+        print('Active transfer connection + safe idle 30-day cache retention: passed', flush=True)
         peak_command = ['python3', '-c', 'data=bytearray(128*1024**2); print(len(data))']
         first_peak = json.loads(execute(name, 'run', payload(peak_command, ram_bytes=None)))
         assert first_peak['status'] == 'passed', first_peak

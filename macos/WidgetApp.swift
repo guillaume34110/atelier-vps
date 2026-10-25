@@ -115,7 +115,7 @@ final class Monitor: ObservableObject {
         onUpdate?()
         if visible {
             timer?.invalidate()
-            let delay = failures > 0 ? min(60, 5 * pow(2, Double(min(failures - 1, 4)))) : (document?.agents.isEmpty == false || successfulSamples < 2 ? 5.0 : 30.0)
+            let delay = failures > 0 ? min(60, 5 * pow(2, Double(min(failures - 1, 4)))) : (document?.connectedAgents.isEmpty == false || successfulSamples < 2 ? 5.0 : 30.0)
             timer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in self?.refresh() }
             timer?.tolerance = delay * 0.1
         }
@@ -190,14 +190,15 @@ private struct Dial: View {
     let fraction: Double?
     let detail: String
     var danger: Double = 0.85
+    var compact = false
 
     var body: some View {
         VStack(spacing: 2) {
             GaugeFace(level: fraction ?? 0, known: fraction != nil, danger: danger)
-                .frame(height: 124)
+                .frame(height: compact ? 100 : 124)
                 .animation(.easeInOut(duration: 0.8), value: fraction)
             Text(title).font(.system(size: 11, weight: .bold)).tracking(1.2)
-            Text(value).font(.system(size: 20, weight: .semibold, design: .rounded)).monospacedDigit()
+            Text(value).font(.system(size: compact ? 18 : 20, weight: .semibold, design: .rounded)).monospacedDigit()
             Text(detail).font(.system(size: 9, design: .monospaced)).foregroundColor(Paint.muted).lineLimit(1)
         }
         .padding(.horizontal, 8).padding(.bottom, 8)
@@ -228,6 +229,7 @@ private struct Collapsible<Content: View>: View {
 }
 
 private struct WidgetView: View {
+    let layout: WidgetLayout
     @ObservedObject var monitor: Monitor
     @ObservedObject var admin: Administration
     let hide: () -> Void
@@ -275,10 +277,10 @@ private struct WidgetView: View {
                     Collapsible("Resources", key: profile + ".resources") {
                         HStack(spacing: 8) {
                             Dial(title: L("YOUR CPU"), value: percent(monitor.cpu.worker), fraction: monitor.cpu.worker,
-                                 detail: LF("Limit %.2f vCPU", snapshot?.telemetry?.worker_cpu_limit ?? Double(snapshot?.pool?.cpu_total ?? 0)))
+                                 detail: LF("Limit %.2f vCPU", snapshot?.telemetry?.worker_cpu_limit ?? Double(snapshot?.pool?.cpu_total ?? 0)), compact: layout == .compact)
                             Dial(title: L("RESERVABLE RAM"), value: gib(snapshot?.pool?.ram_available) + " " + unit,
                                  fraction: snapshot?.ramUsageFraction,
-                                 detail: LF("Task use %@", percent(snapshot?.ramUsageFraction)))
+                                 detail: LF("Task use %@", percent(snapshot?.ramUsageFraction)), compact: layout == .compact)
                         }.opacity(monitor.connected ? 1 : 0.5)
                         VStack(alignment: .leading, spacing: 7) {
                             Text(LF("Reservable now: %@ %@ RAM", gib(snapshot?.pool?.ram_available), unit))
@@ -292,40 +294,15 @@ private struct WidgetView: View {
                             Text(LF("Free: %@ %@", gib(snapshot?.workspace_free_bytes), unit)).foregroundColor(Paint.muted)
                         }.font(.system(size: 11)).frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    Collapsible("Tasks", key: profile + ".tasks") {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(LF("%d / %d tasks", snapshot?.agents.count ?? 0, snapshot?.pool?.max_jobs ?? 4)).foregroundColor(Paint.muted)
-                            if monitor.connected, let agents = snapshot?.agents, !agents.isEmpty {
-                                ForEach(agents) { agent in
-                                    HStack {
-                                        Circle().fill(agent.orphaned == true ? .orange : Paint.green).frame(width: 7, height: 7)
-                                        VStack(alignment: .leading, spacing: 3) {
-                                            Text(agent.agent).fontWeight(.semibold).lineLimit(1)
-                                            Text(agent.project).foregroundColor(Paint.muted).lineLimit(1)
-                                            Text(LF("Reserved: %@ %@ RAM", gib(agent.ram_bytes), unit)).font(.system(size: 10)).foregroundColor(Paint.muted)
-                                        }
-                                        Spacer(minLength: 4)
-                                        Text(agent.elapsed(at: Date())).monospacedDigit()
-                                    }.font(.system(size: 11)).padding(.vertical, 3)
-                                }
-                            } else { Text(L(monitor.connected ? "No active task" : "Task status unavailable")).foregroundColor(Paint.muted) }
-                        }.frame(maxWidth: .infinity, alignment: .leading).font(.system(size: 11))
-                    }
-                    Collapsible("History", key: profile + ".history") {
-                        VStack(alignment: .leading, spacing: 8) {
-                            if let recent = snapshot?.recent, !recent.isEmpty {
-                                ForEach(Array(recent.prefix(3))) { entry in
-                                    HStack(spacing: 7) {
-                                        Image(systemName: entry.status == "passed" ? "checkmark.circle.fill" : "exclamationmark.circle")
-                                            .foregroundColor(entry.status == "passed" ? Paint.green : .orange)
-                                        Text(entry.agent).lineLimit(1)
-                                        Spacer(minLength: 4)
-                                        Text(L(entry.status == "passed" ? "Completed" : "Failed"))
-                                        Text(entry.elapsed(at: Date())).monospacedDigit()
-                                    }.font(.system(size: 10))
-                                }
-                            } else { Text(L("Completed tasks appear here")).font(.system(size: 11)) }
-                        }.foregroundColor(Paint.muted).frame(maxWidth: .infinity, alignment: .leading)
+                    if layout == .wide {
+                        HStack(alignment: .top, spacing: 10) {
+                            agentsSection.frame(maxWidth: .infinity)
+                            VStack(spacing: 10) { transfersSection; historySection }.frame(maxWidth: .infinity)
+                        }
+                    } else {
+                        agentsSection
+                        transfersSection
+                        historySection
                     }
                 }.id(profile)
             }
@@ -338,12 +315,85 @@ private struct WidgetView: View {
                 }.buttonStyle(.plain).help(L("Dashboard")).accessibilityLabel(L("Dashboard"))
             }.font(.system(size: 10)).foregroundColor(monitor.connected ? Paint.muted : .orange)
         }
-        .padding(14).frame(minWidth: 360, idealWidth: 480, maxWidth: .infinity, minHeight: 240, idealHeight: 640, maxHeight: .infinity)
+        .padding(14).frame(minWidth: 340, idealWidth: 480, maxWidth: .infinity, minHeight: 220, idealHeight: 640, maxHeight: .infinity)
         .foregroundColor(.white.opacity(0.92))
         .background(LinearGradient(colors: [Paint.panel, Paint.background], startPoint: .topLeading, endPoint: .bottomTrailing))
         .clipShape(RoundedRectangle(cornerRadius: 18))
         .overlay(RoundedRectangle(cornerRadius: 18).stroke(.white.opacity(0.17), lineWidth: 1))
         .preferredColorScheme(.dark).environment(\.locale, Locale(identifier: UILanguage.code)).id(language)
+    }
+    private var agentsSection: some View {
+        Collapsible("Connected agents", key: profile + ".tasks") {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(LF("%d connected · %d / %d tasks", snapshot?.connectedAgents.count ?? 0,
+                        snapshot?.agents.count ?? 0, snapshot?.pool?.max_jobs ?? 4)).foregroundColor(Paint.muted)
+                    .help(L("An agent is connected while running a task or transferring files."))
+                if monitor.connected, let agents = snapshot?.connectedAgents, !agents.isEmpty {
+                    ForEach(agents) { agent in
+                        HStack(alignment: .top, spacing: 7) {
+                            Circle().fill(agent.orphaned == true ? .orange : Paint.green).frame(width: 7, height: 7).padding(.top, 3)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(agent.agent).fontWeight(.semibold).lineLimit(2).help(agent.agent)
+                                Text(agent.project).foregroundColor(Paint.muted).lineLimit(1)
+                                if agent.ram_bytes != nil {
+                                    Text(LF("Reserved: %@ %@ RAM", gib(agent.ram_bytes), unit)).foregroundColor(Paint.muted)
+                                } else { Text(L("Transferring files")).foregroundColor(Paint.muted) }
+                                if layout == .compact { Text(agent.clockRange).foregroundColor(Paint.muted).monospacedDigit() }
+                            }
+                            Spacer(minLength: 2)
+                            Text(agent.elapsed(at: Date())).monospacedDigit()
+                        }.font(.system(size: 11)).padding(.vertical, 3)
+                    }
+                } else { Text(L(monitor.connected ? "No connected agent" : "Task status unavailable")).foregroundColor(Paint.muted) }
+            }.frame(maxWidth: .infinity, alignment: .leading).font(.system(size: 11))
+        }
+    }
+    private var transfersSection: some View {
+        Collapsible("Transfers", key: profile + ".transfers") {
+            VStack(alignment: .leading, spacing: 8) {
+                if let transfers = snapshot?.transfers, !transfers.isEmpty {
+                    ForEach(Array((transfers.filter { $0.status == "running" } + transfers.filter { $0.status != "running" }).prefix(4))) { transfer in
+                        HStack(alignment: .top, spacing: 7) {
+                            Image(systemName: transfer.direction == "upload" ? "arrow.up.right" : "arrow.down.left")
+                                .foregroundColor(transfer.status == "failed" ? .orange : Paint.green)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(transfer.agent).lineLimit(2).help(transfer.agent)
+                                Text(L(transfer.direction == "upload" ? "To VPS" : "From VPS") + " · " + transferBytes(transfer.bytes))
+                                    .foregroundColor(Paint.muted)
+                                Text(transfer.clockRange).font(.system(size: 9)).monospacedDigit().foregroundColor(Paint.muted)
+                            }
+                            Spacer(minLength: 2)
+                            VStack(alignment: .trailing, spacing: 3) {
+                                Text(L(transfer.status == "running" ? "In progress" : transfer.status == "passed" ? "Completed" : "Failed"))
+                                Text(transferBytes(transfer.transferRate) + "/s").monospacedDigit().help(L("Average transfer speed"))
+                            }.font(.system(size: 9)).foregroundColor(Paint.muted)
+                        }.font(.system(size: 11))
+                    }
+                } else { Text(L(snapshot?.telemetry?.transfers == nil ? "Transfers available after worker update" : "No transfer yet")).foregroundColor(Paint.muted) }
+            }.frame(maxWidth: .infinity, alignment: .leading).font(.system(size: 11))
+                .opacity(monitor.connected ? 1 : 0.45)
+        }
+    }
+    private var historySection: some View {
+        Collapsible("History", key: profile + ".history") {
+            VStack(alignment: .leading, spacing: 8) {
+                if let recent = snapshot?.recent, !recent.isEmpty {
+                    ForEach(Array(recent.prefix(3))) { entry in
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack(alignment: .top, spacing: 7) {
+                                Image(systemName: entry.status == "passed" ? "checkmark.circle.fill" : "exclamationmark.circle")
+                                    .foregroundColor(entry.status == "passed" ? Paint.green : .orange)
+                                Text(entry.agent).lineLimit(layout == .standard ? 1 : 2).help(entry.agent)
+                                Spacer(minLength: 2)
+                                Text(entry.elapsed(at: Date())).monospacedDigit()
+                            }
+                            Text(entry.clockRange + " · " + L(entry.status == "passed" ? "Completed" : "Failed"))
+                                .font(.system(size: 9)).monospacedDigit().fixedSize(horizontal: false, vertical: true)
+                        }.font(.system(size: 10))
+                    }
+                } else { Text(L("Completed tasks appear here")).font(.system(size: 11)) }
+            }.foregroundColor(Paint.muted).frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
     private var freshness: String {
         guard let received = monitor.received else { return L(monitor.error) }
@@ -382,6 +432,15 @@ private struct MiniWidget: View {
                 metric(L("Committed"), gib(snapshot?.pool?.ram_reserved) + " " + L("GiB"), nil)
                 metric(L("Tasks"), "\(snapshot?.agents.count ?? 0)/\(snapshot?.pool?.max_jobs ?? 4)", Double(snapshot?.agents.count ?? 0) / Double(snapshot?.pool?.max_jobs ?? 4))
             }.opacity(monitor.connected ? 1 : 0.45)
+            HStack(spacing: 4) {
+                Text(LF("%d agents", snapshot?.connectedAgents.count ?? 0))
+                Spacer(minLength: 2)
+                Image(systemName: "arrow.up.right")
+                Text("\(snapshot?.activeTransfers.filter { $0.direction == "upload" }.count ?? 0)")
+                Image(systemName: "arrow.down.left")
+                Text("\(snapshot?.activeTransfers.filter { $0.direction == "download" }.count ?? 0)")
+            }.font(.system(size: 9)).monospacedDigit().foregroundColor(Paint.muted)
+                .opacity(monitor.connected ? 1 : 0.45)
             if !monitor.connected || snapshot?.maintenance == true {
                 Text(L(monitor.connected ? "Maintenance" : "Offline · values may be stale"))
                     .font(.system(size: 9)).foregroundColor(.orange)
@@ -418,10 +477,13 @@ private struct WidgetRoot: View {
     let compact: () -> Void
 
     var body: some View {
-        if monitor.compact {
-            MiniWidget(monitor: monitor, expand: compact, menu: menu)
-        } else {
-            WidgetView(monitor: monitor, admin: admin, hide: hide, menu: menu, compact: compact)
+        GeometryReader { geometry in
+            let layout = WidgetLayout.resolve(width: geometry.size.width, height: geometry.size.height)
+            if layout == .mini {
+                MiniWidget(monitor: monitor, expand: compact, menu: menu)
+            } else {
+                WidgetView(layout: layout, monitor: monitor, admin: admin, hide: hide, menu: menu, compact: compact)
+            }
         }
     }
 }
@@ -451,7 +513,7 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         host.sizingOptions = []
         let size = NSSize(width: 480, height: 670)
         panel = WidgetPanel(contentRect: NSRect(origin: .zero, size: size), styleMask: [.borderless, .nonactivatingPanel, .resizable], backing: .buffered, defer: false)
-        panel.minSize = NSSize(width: 360, height: 240)
+        panel.minSize = NSSize(width: 340, height: 96)
         panel.maxSize = NSSize(width: 900, height: 1200)
         panel.title = "Atelier VPS"
         panel.contentView = host
@@ -500,15 +562,12 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard monitor.compact != value else { return }
         if value {
             fullFrame = panel.frame
-            panel.minSize = NSSize(width: 340, height: 96)
-            panel.maxSize = NSSize(width: 900, height: 140)
             monitor.compact = true
             panel.setContentSize(NSSize(width: 400, height: 96))
         } else {
-            panel.minSize = NSSize(width: 360, height: 240)
-            panel.maxSize = NSSize(width: 900, height: 1200)
             monitor.compact = false
             if let frame = fullFrame { panel.setFrame(frame, display: true) }
+            else { panel.setContentSize(NSSize(width: 480, height: 670)) }
         }
         if !CommandLine.arguments.contains("--capture") { UserDefaults.standard.set(value, forKey: "atelier-mini") }
     }
@@ -566,7 +625,14 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         frame.size.width = min(window.maxSize.width, max(window.minSize.width, frame.width))
         frame.size.height = min(window.maxSize.height, max(window.minSize.height, frame.height))
         if frame != window.frame { window.setFrame(frame, display: true) }
-        if !monitor.compact && !CommandLine.arguments.contains("--capture") { window.saveFrame(usingName: "usevps-widget") }
+        monitor.compact = WidgetLayout.resolve(width: frame.width, height: frame.height) == .mini
+        if !CommandLine.arguments.contains("--capture") {
+            UserDefaults.standard.set(monitor.compact, forKey: "atelier-mini")
+            if !monitor.compact {
+                if frame.height >= 320 { fullFrame = frame }
+                window.saveFrame(usingName: "usevps-widget")
+            }
+        }
     }
     func windowDidMove(_ notification: Notification) {
         if !monitor.compact && !CommandLine.arguments.contains("--capture") { panel.saveFrame(usingName: "usevps-widget") }
@@ -632,6 +698,14 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             guard !monitor.compact && panel.frame == original else {
                 fputs("Full frame restoration failed: expected \(original), actual \(panel.frame)\n", stderr); exit(1)
             }
+            for (width, height, expected) in [(439.0, 640.0, WidgetLayout.compact), (440, 640, .standard),
+                                              (699, 640, .standard), (700, 640, .wide),
+                                              (480, 219, .mini), (480, 220, .standard)] {
+                panel.setContentSize(NSSize(width: width, height: height))
+                precondition(WidgetLayout.resolve(width: panel.frame.width, height: panel.frame.height) == expected)
+                precondition(monitor.compact == (expected == .mini))
+            }
+            panel.setFrame(original, display: true)
             refresh(); precondition(monitor.refreshing)
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [self] in
@@ -650,6 +724,10 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     "ram_fraction": monitor.document?.ramUsageFraction.map { $0 as Any } ?? NSNull(),
                     "bundle": Bundle.main.bundlePath, "window_width": view.bounds.width, "window_height": view.bounds.height,
                     "controls_exercised": CommandLine.arguments.contains("--exercise-controls"),
+                    "automatic_breakpoints_exercised": CommandLine.arguments.contains("--exercise-controls"),
+                    "connected_agents": monitor.document?.connectedAgents.count ?? 0,
+                    "active_transfers": monitor.document?.activeTransfers.count ?? 0,
+                    "history_times": monitor.document?.recent.prefix(3).map(\.clockRange) ?? [],
                     "administrator_authenticated": administration.authorized,
                     "administrator_roundtrip_verified": adminCheckStage == 3 && adminCheckApplied,
                     "status": try JSONSerialization.jsonObject(with: monitor.raw)]
@@ -667,7 +745,10 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             ("narrow", 360, 600, false, false), ("standard", 480, 640, false, false),
             ("wide", 720, 800, false, false), ("short", 360, 300, false, false),
             ("mini-small", 340, 96, true, false), ("mini", 400, 96, true, false),
-            ("mini-wide", 600, 96, true, false)]
+            ("mini-wide", 600, 96, true, false),
+            ("compact-edge", 439, 760, false, false), ("standard-edge", 440, 760, false, false),
+            ("column-before", 699, 800, false, false), ("column-after", 700, 800, false, false),
+            ("auto-mini", 480, 219, true, false), ("auto-full", 480, 220, false, false)]
         if administration.authorized {
             layouts += [("admin-narrow", 360, 620, false, true), ("admin", 480, 740, false, true),
                         ("admin-wide", 720, 800, false, true)]
@@ -686,14 +767,14 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 return
             }
             let (name, width, height, mini, admin) = layouts[index]
-            setCompact(mini); administration.showingManagement = admin
+            administration.showingManagement = admin
             if admin { administration.selectMode("allocated") }
             panel.setContentSize(NSSize(width: width, height: height))
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [self] in
                 do {
                     guard let view = panel.contentView else { throw MonitorError.invalidData }
                     view.layoutSubtreeIfNeeded()
-                    guard view.bounds.width == width && view.bounds.height == height else {
+                    guard view.bounds.width == width && view.bounds.height == height && monitor.compact == mini else {
                         fputs("Layout \(name) expected \(width)×\(height), actual \(view.bounds)\n", stderr); exit(1)
                     }
                     guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { throw MonitorError.invalidData }
@@ -703,6 +784,7 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     try png.write(to: image, options: .withoutOverwriting)
                     evidence.append(["layout": name, "width": width, "height": height, "image": image.lastPathComponent,
                                      "mini": mini, "management": admin, "administrator_authenticated": administration.authorized,
+                                     "resolved_layout": WidgetLayout.resolve(width: width, height: height).rawValue,
                                      "server_mode": monitor.document?.scope?.mode ?? "unknown", "settings_applied": false])
                     next(index + 1)
                 } catch { fputs("Layout capture failed: \(error)\n", stderr); exit(1) }

@@ -18,7 +18,8 @@ import threading
 import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from telemetry import process_token, public_label, record_activity, snapshot
+from telemetry import process_token, public_label, record_activity, snapshot, Transfer
+import dependency_cache
 import resources
 from quota_protection import protect_quota
 
@@ -147,6 +148,7 @@ def public_status():
     state = status()
     state['telemetry'] = snapshot(ROOT, state['busy'])
     telemetry = state['telemetry']
+    telemetry['cache_retention'] = dependency_cache.status(ROOT)
     telemetry['worker_cpu_limit'] = float(os.environ.get('USEVPS_CPU_LIMIT', resources.cpu_capacity()))
     if state['scope']['mode'] == 'allocated':
         for key in ('cpu_total', 'cpu_idle', 'host_total_ram', 'system_disk_total', 'system_disk_free'):
@@ -299,6 +301,7 @@ def run_job(request, stream):
                 raise RuntimeError("receipt headroom unavailable; retrieve and release completed jobs")
             cache = ROOT / 'cache'
             cache.mkdir(exist_ok=True)
+            task_cache = dependency_cache.scope(ROOT, request)
             if not (ROOT / '.cache-accounting.json').exists():
                 resources.write_json(ROOT / '.cache-accounting.json', usage(cache))
         reserve_ram = int(float(os.environ.get("USEVPS_HOST_RAM_RESERVE_GIB", "1")) * GIB)
@@ -310,15 +313,16 @@ def run_job(request, stream):
                   "reservation": {k: lease.value[k] for k in ('cpus', 'ram_bytes', 'disk_bytes', 'ram_source')}}
         receipt(path, result)
         try:
-            extract(stream, work)
+            with Transfer(ROOT, stream, 'upload', ident, agent, project) as transfer:
+                extract(transfer, work)
             for directory in (work / ".tmp", work / ".home", ROOT / "cache"):
                 directory.mkdir(exist_ok=True)
             env = os.environ.copy()
             env.update(HOME=str(work / ".home"), TMPDIR=str(work / ".tmp"),
-                       XDG_CACHE_HOME=str(ROOT / "cache"), PIP_CACHE_DIR=str(ROOT / "cache" / "pip"),
-                       npm_config_cache=str(ROOT / "cache" / "npm"),
-                       npm_config_store_dir=str(ROOT / "cache" / "pnpm"),
-                       UV_CACHE_DIR=str(ROOT / "cache" / "uv"), GRADLE_USER_HOME=str(ROOT / "cache" / "gradle"),
+                       XDG_CACHE_HOME=str(task_cache), PIP_CACHE_DIR=str(task_cache / "pip"),
+                       npm_config_cache=str(task_cache / "npm"),
+                       npm_config_store_dir=str(task_cache / "pnpm"),
+                       UV_CACHE_DIR=str(task_cache / "uv"), GRADLE_USER_HOME=str(task_cache / "gradle"),
                        USEVPS_JOB_DISK_BYTES=str(peak), USEVPS_JOB_ID=ident,
                        USEVPS_CPU_CAPACITY=str(resources.cpu_capacity()))
             env["JAVA_TOOL_OPTIONS"] = (env.get("JAVA_TOOL_OPTIONS", "")
@@ -440,7 +444,8 @@ def fetch(request, stream):
         with file.open("rb") as source:
             digest = hashlib.file_digest(source, "sha256").hexdigest()
         manifest[name] = {"bytes": file.stat().st_size, "sha256": digest}
-    with tarfile.open(fileobj=stream, mode="w|") as archive:
+    with Transfer(ROOT, stream, 'download', path.name, state.get('agent'), state.get('project')) as transfer, \
+            tarfile.open(fileobj=transfer, mode="w|") as archive:
         data = json.dumps(manifest).encode()
         info = tarfile.TarInfo("manifest.json")
         info.size = len(data)
@@ -499,7 +504,19 @@ def main():
 
             def log_message(self, *_):
                 pass
-        ThreadingHTTPServer(("0.0.0.0", 8080), Health).serve_forever()
+        class Server(ThreadingHTTPServer):
+            last_cleanup = 0
+            cleanup = None
+
+            def service_actions(self):
+                if (time.monotonic() - self.last_cleanup >= 3600
+                        and (self.cleanup is None or not self.cleanup.is_alive())):
+                    # Deleting a large cold cache must not stall HTTP health checks.
+                    self.cleanup = threading.Thread(target=dependency_cache.maintain, args=(ROOT,), daemon=True)
+                    self.cleanup.start()
+                    self.last_cleanup = time.monotonic()
+
+        Server(("0.0.0.0", 8080), Health).serve_forever()
     elif action == "status":
         print(json.dumps(public_status()))
     elif action == "run":

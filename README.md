@@ -16,7 +16,7 @@ Atelier VPS moves compatible builds, tests and file processing off your laptop.
 Several agents can use one VPS at the same time, with atomic resource
 reservations and bounded jobs. Node, Python, Java, Chromium and native build
 utilities share one immutable toolchain. A small native Mac widget shows real
-analog CPU/RAM gauges, running agents and their reserved slices.
+analog CPU/RAM gauges, connected agents, transfers and timestamped activity.
 
 No public worker port is required. The local client and MCP server use a
 restricted SSH gateway. Your credentials stay in your own SSH configuration.
@@ -103,6 +103,14 @@ remain retrievable when resources are exhausted.
 Exact versions and checksums are in [toolchain-lock.json](ops/toolchain-lock.json).
 Keep macOS APIs, Metal/MLX, GPU tasks, Docker daemon work, Android emulators and
 incompatible SDK/NDK binaries on a compatible machine.
+
+The base tools stay installed; they do not reserve idle RAM. Reproducible
+dependency caches are reused by project and lockfile digest. Using that scope
+refreshes its retention for 30 days. An hourly idle pass removes only expired,
+marked cache scopes, with the same exclusive lock that protects deployments.
+Running jobs, immutable tools, sources, results and untracked legacy caches are
+never swept. A cold scope downloads its locked dependencies again; allow that
+peak in the disk reservation.
 
 ## Designed to be understood
 

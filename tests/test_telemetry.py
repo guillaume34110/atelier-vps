@@ -1,5 +1,6 @@
 import errno
 import json
+import io
 from pathlib import Path
 import tempfile
 import unittest
@@ -9,6 +10,50 @@ import telemetry
 
 
 class TelemetryTests(unittest.TestCase):
+    def test_transfer_counts_real_bytes_and_closes_without_claiming_a_connection(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(telemetry, 'process_token', return_value='123:10'):
+            root = Path(tmp)
+            with telemetry.Transfer(root, io.BytesIO(b'actual source'), 'upload', 'a' * 32, 'Agent A', 'app') as transfer:
+                self.assertEqual(transfer.read(6), b'actual')
+                transfer.sample(force=True)
+                active = telemetry.snapshot(root, False)['transfers']
+                self.assertEqual(active[0]['status'], 'running')
+                self.assertEqual(active[0]['bytes'], 6)
+                self.assertEqual(active[0]['job'], 'a' * 32)
+                self.assertEqual(transfer.read(), b' source')
+            done = telemetry.history(root, 'transfers')[0]
+            self.assertEqual(done['bytes'], 13)
+            self.assertEqual(done['status'], 'passed')
+            self.assertIsNotNone(done['ended'])
+            self.assertNotIn('argv', done)
+            stream = io.BytesIO()
+            with self.assertRaises(RuntimeError):
+                with telemetry.Transfer(root, stream, 'download', 'a' * 32, 'Agent A', 'app') as transfer:
+                    self.assertEqual(transfer.write(b'result'), 6)
+                    raise RuntimeError('broken transfer')
+            self.assertEqual(telemetry.history(root, 'transfers')[0]['status'], 'failed')
+            self.assertEqual(stream.getvalue(), b'result')
+
+    def test_transfer_history_is_bounded_and_dead_connections_are_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for n in range(20):
+                with telemetry.Transfer(root, io.BytesIO(), 'download', 'a' * 32, 'É' * 64, 'É' * 64):
+                    pass
+            self.assertEqual(len(telemetry.history(root, 'transfers')), 16)
+            with telemetry.Transfer(root, io.BytesIO(), 'upload', 'a' * 32, 'Agent', 'app'):
+                with patch.object(telemetry, 'process_token', return_value=None):
+                    stale = telemetry.history(root, 'transfers')[0]
+                    self.assertEqual(stale['status'], 'failed')
+                    self.assertIsNotNone(stale['ended'])
+
+    def test_transfer_telemetry_failure_preserves_the_actual_stream(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(telemetry, 'record_activity', return_value=False):
+            stream = io.BytesIO()
+            with telemetry.Transfer(Path(tmp), stream, 'download', 'a' * 32, 'Agent', 'app') as transfer:
+                transfer.write(b'keep')
+            self.assertEqual(stream.getvalue(), b'keep')
+
     def record(self, number, **values):
         return {'id': f'{number:032x}', 'agent': 'Tests navigateur', 'project': 'frontend',
                 'status': 'running', 'started': 1000, 'runner': '123:10', **values}

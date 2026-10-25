@@ -23,6 +23,9 @@ def main():
     assert image.read_bytes().startswith(b'\x89PNG\r\n\x1a\n')
     assert result['source'] == 'real restricted SSH' and result['connected'] and result['samples'] >= 2
     assert result['controls_exercised'] is True
+    assert result['automatic_breakpoints_exercised'] is True
+    assert result['connected_agents'] >= len(result['status']['pool']['active'])
+    assert all(':' in clock for clock in result['history_times'])
     assert result['status']['ok'] and 360 <= result['window_width'] <= 900 and result['window_height'] >= 180
     pool = result['status']['pool']
     used = pool['ram_accounting']['used_bytes']
@@ -36,11 +39,15 @@ def main():
         layouts = json.loads((root / 'widget-layouts.json').read_text())
         names = {item['layout'] for item in layouts}
         assert {'narrow', 'standard', 'wide', 'short', 'mini-small', 'mini', 'mini-wide'} <= names
+        assert {'compact-edge', 'standard-edge', 'column-before', 'column-after', 'auto-mini', 'auto-full'} <= names
         if result['administrator_authenticated']:
             assert {'admin-narrow', 'admin', 'admin-wide'} <= names
         for item in layouts:
             assert (root / item['image']).read_bytes().startswith(b'\x89PNG\r\n\x1a\n')
             assert item['settings_applied'] is False
+            assert item['mini'] == (item['height'] < 220)
+            expected = 'mini' if item['height'] < 220 else 'compact' if item['width'] < 440 else 'standard' if item['width'] < 700 else 'wide'
+            assert item['resolved_layout'] == expected
     if args.admin:
         assert result['administrator_roundtrip_verified'] is True
     print(json.dumps({'native_live_render': 'passed', 'samples': result['samples'],
