@@ -1,0 +1,46 @@
+# Coolify 4 raw deployment; CI verifies the same worker protections as the base file.
+services:
+  worker:
+    container_name: ateliervps-worker
+    build: .
+    restart: unless-stopped
+    user: "10001:10001"
+    read_only: true
+    # X server locks need /tmp; no host disk or additional privileges.
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=8388608,mode=0700,uid=10001,gid=10001
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: ${USEVPS_MEMORY_LIMIT:-5g}
+    memswap_limit: ${USEVPS_MEMORY_LIMIT:-5g}
+    # Coolify 3 ships Compose 2.6, which ignores service-level cpus.
+    cpu_period: 100000
+    cpu_quota: ${USEVPS_CPU_QUOTA:-400000}
+    cpu_shares: ${USEVPS_CPU_SHARES:-128}
+    pids_limit: 512
+    oom_score_adj: 500
+    environment:
+      - USEVPS_VOLUME_ID=${USEVPS_VOLUME_ID:-configure-the-added-volume-uuid}
+      - USEVPS_RESERVE_GIB=0.5
+      - USEVPS_HOST_RAM_RESERVE_GIB=1
+      - USEVPS_VOLUME_STATS=/volume-stat
+      - USEVPS_TENANT=${USEVPS_TENANT:-owner}
+      - USEVPS_MODE=${USEVPS_MODE:-opportunistic}
+      - USEVPS_CPU_LIMIT=${USEVPS_CPU_LIMIT:-4}
+      - USEVPS_MAX_JOBS=${USEVPS_MAX_JOBS:-4}
+      - USEVPS_POOL_RAM_GIB=${USEVPS_POOL_RAM_GIB:-5}
+    volumes:
+      - "${USEVPS_VOLUME_MOUNT:?Set the dedicated Atelier VPS volume mount}/usevps:/workspace"
+      - "${USEVPS_VOLUME_MOUNT:?Set the dedicated Atelier VPS volume mount}/.usevps-stat:/volume-stat:ro"
+      - "${USEVPS_VOLUME_MOUNT:?Set the dedicated Atelier VPS volume mount}/.usevps-dev/usr:/usr:ro"
+      - "${USEVPS_VOLUME_MOUNT:?Set the dedicated Atelier VPS volume mount}/.usevps-dev/usr/bin:/bin:ro"
+      - "${USEVPS_VOLUME_MOUNT:?Set the dedicated Atelier VPS volume mount}/.usevps-dev/usr/sbin:/sbin:ro"
+      - "${USEVPS_VOLUME_MOUNT:?Set the dedicated Atelier VPS volume mount}/.usevps-dev/usr/lib:/lib:ro"
+      - "${USEVPS_VOLUME_MOUNT:?Set the dedicated Atelier VPS volume mount}/.usevps-dev/usr/lib64:/lib64:ro"
+      - "${USEVPS_VOLUME_MOUNT:?Set the dedicated Atelier VPS volume mount}/.usevps-dev/etc:/etc:ro"
+      - "${USEVPS_VOLUME_MOUNT:?Set the dedicated Atelier VPS volume mount}/.usevps-dev/opt:/opt:ro"
+    logging:
+      driver: json-file
+      options:
+        max-size: 2m
+        max-file: "2"

@@ -18,6 +18,7 @@ sys.path.insert(0, str(REPO))
 import vps
 from scripts import desktop_checks
 from ops.gateway import WORKER_EXEC, DESKTOP_TMPFS
+from ops.render_compose import bindings
 
 
 def command(argv, **kwargs):
@@ -66,6 +67,28 @@ def ssh_frontends(parent):
     return [int(pid) for pid, _, name in entries if int(pid) in owned and Path(name).name == 'ssh']
 
 
+def compose_deployments():
+    env = {**os.environ, 'USEVPS_VOLUME_MOUNT': '/ci-atelier-vps'}
+    def service(file):
+        return json.loads(command(['docker', 'compose', '-f', file, 'config', '--format', 'json'],
+                                  cwd=REPO, env=env))['services']['worker']
+    base, cloud = service('docker-compose.yaml'), service('docker-compose.coolify.yaml')
+    mounts = cloud.pop('volumes')
+    base.pop('volumes', None)
+    assert cloud == base, 'Coolify manifest must preserve all canonical worker protections'
+    expected = {}
+    for value in bindings({'volume_mount': env['USEVPS_VOLUME_MOUNT']}):
+        source, target, *options = value.split(':')
+        expected[target] = ('bind', source, options == ['ro'])
+    actual = {v['target']: (v['type'], v['source'], v.get('read_only', False)) for v in mounts}
+    assert len(mounts) == 9 and actual == expected, 'nine exact dedicated-volume binds required'
+    missing = {k: v for k, v in os.environ.items() if k != 'USEVPS_VOLUME_MOUNT'}
+    refused = subprocess.run(['docker', 'compose', '-f', 'docker-compose.coolify.yaml', 'config', '--quiet'],
+                             cwd=REPO, env=missing, capture_output=True)
+    assert refused.returncode and b'USEVPS_VOLUME_MOUNT' in refused.stderr, 'missing volume must fail before deployment'
+    print('Portable Coolify Compose protections, nine binds and missing-volume refusal: passed', flush=True)
+
+
 def main():
     root = Path(os.environ["TASK_WORKSPACE"])
     root.mkdir(parents=True, exist_ok=True)
@@ -89,6 +112,7 @@ def main():
                      "/lib64": "usr/lib64", "/etc": "etc", "/opt": "opt"}.items():
         mounts.extend(["--volume", str(dev / src) + ":" + dst + ":ro"])
     command(["docker", "compose", "-f", "docker-compose.yaml", "config", "--quiet"], cwd=REPO)
+    compose_deployments()
     command(["docker", "build", "-t", "usevps:checks", "."], cwd=REPO)
     image = json.loads(command(['docker', 'image', 'inspect', 'usevps:checks']))[0]['Id']
     print("Container build: passed", flush=True)

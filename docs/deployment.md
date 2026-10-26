@@ -64,6 +64,22 @@ Set application runtime values: `USEVPS_VOLUME_ID` to the real UUID,
 it must never store data. Older Coolify versions may mishandle variable-based
 mount sources; explicit application binds avoid that substitution issue.
 
+### Coolify 4 / Coolify Cloud
+
+For a Git application whose Compose editor is read-only, choose
+`/docker-compose.coolify.yaml` as the Compose file. In Advanced, select **Raw
+(deploy file as-is)** and **Manual deployments only**. Set
+`USEVPS_VOLUME_MOUNT` to the prepared dedicated volume mount and
+`USEVPS_VOLUME_ID` to its verified UUID. Leave public domains and published ports
+empty. Pin a revision with both required CI checks green before deploying.
+
+This portable file includes the nine binds and the same CPU, RAM, process,
+read-only-root and temporary-filesystem protections as `docker-compose.yaml`.
+CI compares the rendered worker settings and rejects a missing volume mount.
+Changing its host-specific values does not require putting personal addresses
+or paths into Git. The original Compose file remains available for existing
+installations with explicit Coolify storage entries or a local override.
+
 ## Restricted SSH access
 
 Create a dedicated Ed25519 key on the client, mode 0600, outside the checkout.
