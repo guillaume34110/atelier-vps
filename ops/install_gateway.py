@@ -15,6 +15,9 @@ from prepare_volume import MOUNT, VOLUME_ID, WORKSPACE
 def main():
     if os.geteuid() != 0 or len(sys.argv) != 4 or not re.fullmatch(r"[a-z0-9]+-worker", sys.argv[3]):
         raise ValueError("root, public-key file, gateway source and exact container name are required")
+    process_ceiling = os.environ.get('USEVPS_PIDS_LIMIT', '512')
+    if process_ceiling not in {'512', '768'}:
+        raise ValueError('USEVPS_PIDS_LIMIT must be 512 or 768')
     public = Path(sys.argv[1]).read_text().strip()
     if not public.startswith("ssh-ed25519 ") or len(public.split()) < 2:
         raise ValueError("expected an ed25519 public key")
@@ -54,7 +57,7 @@ def main():
     target.chmod(0o755)
     os.chown(target, 0, 0)
     config.write_text(json.dumps({"mount": str(MOUNT), "workspace": str(WORKSPACE), "volume_id": VOLUME_ID,
-                                  "container": sys.argv[3]}))
+                                  "container": sys.argv[3], "pids_limit": int(process_ceiling)}))
     config.chmod(0o644)
     sudo = Path("/etc/sudoers.d/usevps-gateway")
     content = 'Defaults:usevps env_keep += "SSH_ORIGINAL_COMMAND"\nusevps ALL=(root) NOPASSWD: /usr/local/libexec/usevps-gateway ""\n'

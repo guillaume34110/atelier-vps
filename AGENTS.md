@@ -124,6 +124,7 @@ lecture seule dans l'image, à `/app/AGENTS.md`.
   entrer dans le suivi, les journaux, le dépôt ou les réponses MCP. Aucun port
   VNC public, hyperviseur, privilège ou worker supplémentaire de débordement.
   Conserver les neuf montages hôte explicites et le seul `/tmp` temporaire de
-  8 Mio en RAM, sans exécution, avec UID/GID 10001. La limite de 512 processus
-  et threads laisse de la place au contrôle pendant le démarrage des interfaces ;
-  la recette vérifie l'absence de dépassement et une marge de 32 threads.
+  8 Mio en RAM, sans exécution, avec UID/GID 10001. Garder 512 processus et
+  threads pour les installations existantes ; le manifeste Coolify Cloud utilise
+  768 après calibration des démarrages x86_64, sans augmenter CPU, RAM ou disque.
+  La recette vérifie l'absence de refus et une marge de 32 threads au pic mesuré.

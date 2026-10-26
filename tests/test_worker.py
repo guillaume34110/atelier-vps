@@ -103,6 +103,22 @@ class ArchiveTests(unittest.TestCase):
 
 
 class AdmissionTests(unittest.TestCase):
+    def test_large_verified_project_quota_is_fully_available(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(worker, 'ROOT', Path(tmp)):
+            probe = Path(tmp) / 'capacity'; probe.mkdir()
+            def space(path):
+                return SimpleNamespace(f_bavail=70 * worker.GIB, f_bfree=70 * worker.GIB,
+                                       f_blocks=(80 if path == probe else 76) * worker.GIB, f_frsize=1)
+            with patch.dict(worker.os.environ, {'USEVPS_VOLUME_STATS': str(probe), 'USEVPS_VOLUME_ID': 'test'}), \
+                    patch.object(worker, 'volume_ok', return_value=True), patch.object(worker.os, 'statvfs', side_effect=space), \
+                    patch.object(worker, 'available_ram', return_value=5 * worker.GIB):
+                self.assertEqual(worker.capacity()['budget_bytes'], 76 * worker.GIB)
+                self.assertEqual(worker.validate_job_request({'argv': ['true'], 'disk_bytes': 64 * worker.GIB})[2], 64 * worker.GIB)
+                with self.assertRaises(ValueError):
+                    worker.validate_job_request({'argv': ['true'], 'disk_bytes': 77 * worker.GIB})
+                with patch.object(worker.os, 'statvfs', return_value=space(probe)):
+                    self.assertEqual(worker.capacity()['budget_bytes'], 32 * worker.GIB)
+
     def test_project_quota_and_physical_disk_are_measured_separately(self):
         with tempfile.TemporaryDirectory() as tmp, patch.object(worker, "ROOT", Path(tmp)):
             capacity = Path(tmp) / "capacity"
@@ -144,7 +160,8 @@ class AdmissionTests(unittest.TestCase):
             self.assertFalse(path.exists())
 
     def test_invalid_request_cannot_start_process(self):
-        with tempfile.TemporaryDirectory() as tmp, patch.object(worker, "ROOT", Path(tmp)):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(worker, "ROOT", Path(tmp)), \
+                patch.object(worker, 'capacity', return_value={'budget_bytes': 32 * worker.GIB}):
             for request in [{"argv": "sh"}, {"argv": ["true"], "timeout": 3601},
                             {"argv": ["true"], "disk_bytes": 33 * worker.GIB}]:
                 with self.assertRaises(ValueError), patch("subprocess.Popen") as spawn:

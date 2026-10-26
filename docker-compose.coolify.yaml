@@ -17,7 +17,7 @@ services:
     cpu_period: 100000
     cpu_quota: ${USEVPS_CPU_QUOTA:-400000}
     cpu_shares: ${USEVPS_CPU_SHARES:-128}
-    pids_limit: 512
+    pids_limit: 768
     oom_score_adj: 500
     environment:
       - USEVPS_VOLUME_ID=${USEVPS_VOLUME_ID:-configure-the-added-volume-uuid}
@@ -30,15 +30,16 @@ services:
       - USEVPS_MAX_JOBS=${USEVPS_MAX_JOBS:-4}
       - USEVPS_POOL_RAM_GIB=${USEVPS_POOL_RAM_GIB:-5}
     volumes:
-      - "${USEVPS_VOLUME_MOUNT:?Set the dedicated Atelier VPS volume mount}/usevps:/workspace"
-      - "${USEVPS_VOLUME_MOUNT:?Set the dedicated Atelier VPS volume mount}/.usevps-stat:/volume-stat:ro"
-      - "${USEVPS_VOLUME_MOUNT:?Set the dedicated Atelier VPS volume mount}/.usevps-dev/usr:/usr:ro"
-      - "${USEVPS_VOLUME_MOUNT:?Set the dedicated Atelier VPS volume mount}/.usevps-dev/usr/bin:/bin:ro"
-      - "${USEVPS_VOLUME_MOUNT:?Set the dedicated Atelier VPS volume mount}/.usevps-dev/usr/sbin:/sbin:ro"
-      - "${USEVPS_VOLUME_MOUNT:?Set the dedicated Atelier VPS volume mount}/.usevps-dev/usr/lib:/lib:ro"
-      - "${USEVPS_VOLUME_MOUNT:?Set the dedicated Atelier VPS volume mount}/.usevps-dev/usr/lib64:/lib64:ro"
-      - "${USEVPS_VOLUME_MOUNT:?Set the dedicated Atelier VPS volume mount}/.usevps-dev/etc:/etc:ro"
-      - "${USEVPS_VOLUME_MOUNT:?Set the dedicated Atelier VPS volume mount}/.usevps-dev/opt:/opt:ro"
+      # Coolify validates bind sources before interpolation; keep literal paths.
+      - /mnt/atelier-vps/usevps:/workspace
+      - /mnt/atelier-vps/.usevps-stat:/volume-stat:ro
+      - /mnt/atelier-vps/.usevps-dev/usr:/usr:ro
+      - /mnt/atelier-vps/.usevps-dev/usr/bin:/bin:ro
+      - /mnt/atelier-vps/.usevps-dev/usr/sbin:/sbin:ro
+      - /mnt/atelier-vps/.usevps-dev/usr/lib:/lib:ro
+      - /mnt/atelier-vps/.usevps-dev/usr/lib64:/lib64:ro
+      - /mnt/atelier-vps/.usevps-dev/etc:/etc:ro
+      - /mnt/atelier-vps/.usevps-dev/opt:/opt:ro
     logging:
       driver: json-file
       options:

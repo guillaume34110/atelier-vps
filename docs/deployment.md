@@ -68,16 +68,26 @@ mount sources; explicit application binds avoid that substitution issue.
 
 For a Git application whose Compose editor is read-only, choose
 `/docker-compose.coolify.yaml` as the Compose file. In Advanced, select **Raw
-(deploy file as-is)** and **Manual deployments only**. Set
-`USEVPS_VOLUME_MOUNT` to the prepared dedicated volume mount and
-`USEVPS_VOLUME_ID` to its verified UUID. Leave public domains and published ports
+(deploy file as-is)** and **Manual deployments only**. Make the prepared dedicated
+volume available at `/mnt/atelier-vps` and set `USEVPS_VOLUME_ID` to its verified
+UUID. When the volume already has another mount point, the operator can add a
+persistent bind mount to that same filesystem; no data copy is needed. Verify
+both paths resolve to the expected volume before deploying. Leave public domains and published ports
 empty. Pin a revision with both required CI checks green before deploying.
 
-This portable file includes the nine binds and the same CPU, RAM, process,
+This portable file includes the nine binds and the same CPU, RAM,
 read-only-root and temporary-filesystem protections as `docker-compose.yaml`.
-CI compares the rendered worker settings and rejects a missing volume mount.
-Changing its host-specific values does not require putting personal addresses
-or paths into Git. The original Compose file remains available for existing
+Its process/thread ceiling is 768, calibrated for desktop startup on x86_64;
+the original manifest retains 512. CI requires 32 spare slots at the measured peak
+and no process-limit refusals.
+CI compares the rendered worker settings and exact bind paths. Coolify validates
+bind sources before interpolation and rejects `${...}` there, so this file uses
+the fixed `/mnt/atelier-vps` path. Startup and health still verify the actual volume
+UUID and read-only toolchain; a directory on the wrong filesystem is refused.
+The workspace's verified ext4 project quota sets its total work budget, including
+when it exceeds 32 GiB. Each task must still fit current admission, physical free
+space and its declared peak. The 32 GiB fallback remains for unquotaed test volumes.
+The original Compose file remains available for existing
 installations with explicit Coolify storage entries or a local override.
 
 ## Restricted SSH access
@@ -92,6 +102,10 @@ python3 ops/install_gateway.py /path/to/public-key.pub ops/gateway.py EXACT_CONT
 This also requires root and the volume variables above. With plain Compose the
 default container is `ateliervps-worker`; Coolify assigns its own application
 container name. The installer refuses conflicting users or authorized keys.
+For the Cloud manifest, set `USEVPS_MOUNT=/mnt/atelier-vps` and
+`USEVPS_PIDS_LIMIT=768` when installing the gateway. Its root-owned configuration
+then expects that process ceiling; existing gateways still default to 512 and
+reject a larger limit. Keep the same verified volume UUID.
 It grants only the fixed gateway command, not arbitrary sudo, an interactive
 host shell or Docker access.
 
