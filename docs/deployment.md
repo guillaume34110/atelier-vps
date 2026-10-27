@@ -106,6 +106,15 @@ For the Cloud manifest, set `USEVPS_VOLUME_MOUNT=/mnt/atelier-vps` and
 `USEVPS_PIDS_LIMIT=768` when installing the gateway. Its root-owned configuration
 then expects that process ceiling; existing gateways still default to 512 and
 reject a larger limit. Keep the same verified volume UUID.
+For a larger host, an operator can explicitly set `USEVPS_MEMORY_LIMIT=48g`,
+`USEVPS_POOL_RAM_GIB=48` and a measured `USEVPS_HOST_RAM_RESERVE_GIB` in Cloud.
+Install the gateway with the same `USEVPS_POOL_RAM_GIB`; its root-owned
+`memory_limit_bytes` must authorize the container ceiling. Unconfigured gateways
+retain their 5 GiB limit. The ceiling is not reserved memory: admission uses
+current host availability, the host reserve, controller overhead and existing
+claims. For example, 52.7 GiB available with an 8 GiB host reserve makes about
+44.5 GiB reservable, even with a 48 GiB ceiling. Check other services and their
+observed peaks before choosing these values; do not allocate RAM merely to fill it.
 It grants only the fixed gateway command, not arbitrary sudo, an interactive
 host shell or Docker access.
 

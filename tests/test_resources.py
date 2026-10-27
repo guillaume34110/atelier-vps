@@ -26,6 +26,22 @@ class ResourceTests(unittest.TestCase):
         return r.reserve(self.root, ident * 32, {'cpus': 1, 'ram_bytes': r.GIB,
                                                'disk_bytes': r.GIB, **request}, lambda: self.capacity)
 
+    def test_large_pool_preserves_host_floor_without_double_charging_claims(self):
+        self.capacity['host_available_ram'] = 52 * r.GIB
+        with patch.object(r, 'memory_capacity', return_value=48 * r.GIB - r.OVERHEAD), \
+                patch.dict(r.os.environ, {'USEVPS_HOST_RAM_RESERVE_GIB': '8'}):
+            self.assertEqual(r.view(self.root, self.capacity)['ram_available'], 44 * r.GIB - r.OVERHEAD)
+            with self.claim('a', ram_bytes=32 * r.GIB) as first:
+                remaining = 12 * r.GIB - r.OVERHEAD
+                self.assertEqual(r.view(self.root, self.capacity)['ram_available'], remaining)
+                with self.assertRaises(RuntimeError), self.claim('b', ram_bytes=12 * r.GIB):
+                    pass
+                first.update(4 * r.GIB, 0, [], 0)
+                self.capacity['host_available_ram'] = 48 * r.GIB
+                self.assertEqual(r.view(self.root, self.capacity)['ram_available'], remaining)
+                self.capacity['host_available_ram'] = 7 * r.GIB
+                self.assertEqual(r.view(self.root, self.capacity)['ram_available'], 0)
+
     def test_claims_are_atomic_and_unused_cpu_is_lent(self):
         with self.claim('a') as first, self.claim('b'):
             pool = r.view(self.root, self.capacity)

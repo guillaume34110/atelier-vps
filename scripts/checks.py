@@ -68,10 +68,11 @@ def ssh_frontends(parent):
 
 
 def compose_deployments():
-    def service(file):
+    def service(file, env=None):
         return json.loads(command(['docker', 'compose', '-f', file, 'config', '--format', 'json'],
-                                  cwd=REPO))['services']['worker']
+                                  cwd=REPO, env=env))['services']['worker']
     base, cloud = service('docker-compose.yaml'), service('docker-compose.coolify.yaml')
+    cloud_defaults = dict(cloud)
     mounts = cloud.pop('volumes')
     base.pop('volumes', None)
     base_pids, cloud_pids = base.pop('pids_limit'), cloud.pop('pids_limit')
@@ -84,6 +85,13 @@ def compose_deployments():
     actual = {v['target']: (v['type'], v['source'], v.get('read_only', False)) for v in mounts}
     assert len(mounts) == 9 and actual == expected, 'nine exact dedicated-volume binds required'
     assert all('$' not in v['source'] for v in mounts), 'Coolify rejects interpolation in bind sources'
+    large = service('docker-compose.coolify.yaml', {**os.environ, 'USEVPS_MEMORY_LIMIT': '48g',
+                    'USEVPS_POOL_RAM_GIB': '48', 'USEVPS_HOST_RAM_RESERVE_GIB': '8'})
+    assert int(large['mem_limit']) == int(large['memswap_limit']) == 48 * 1024 ** 3
+    assert str(large['environment']['USEVPS_POOL_RAM_GIB']) == '48'
+    assert str(large['environment']['USEVPS_HOST_RAM_RESERVE_GIB']) == '8'
+    protected = lambda spec: {k: v for k, v in spec.items() if k not in {'mem_limit', 'memswap_limit', 'environment'}}
+    assert protected(large) == protected(cloud_defaults), 'sizing RAM must preserve every other worker protection'
     print('Coolify Compose protections and nine literal dedicated-volume binds: passed', flush=True)
     return cloud_pids
 

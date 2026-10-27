@@ -18,6 +18,9 @@ def main():
     process_ceiling = os.environ.get('USEVPS_PIDS_LIMIT', '512')
     if process_ceiling not in {'512', '768'}:
         raise ValueError('USEVPS_PIDS_LIMIT must be 512 or 768')
+    memory_ceiling = int(float(os.environ.get('USEVPS_POOL_RAM_GIB', '5')) * 1024 ** 3)
+    if not 64 * 1024 ** 2 <= memory_ceiling <= 48 * 1024 ** 3:
+        raise ValueError('USEVPS_POOL_RAM_GIB must be between 0.0625 and 48')
     public = Path(sys.argv[1]).read_text().strip()
     if not public.startswith("ssh-ed25519 ") or len(public.split()) < 2:
         raise ValueError("expected an ed25519 public key")
@@ -57,7 +60,8 @@ def main():
     target.chmod(0o755)
     os.chown(target, 0, 0)
     config.write_text(json.dumps({"mount": str(MOUNT), "workspace": str(WORKSPACE), "volume_id": VOLUME_ID,
-                                  "container": sys.argv[3], "pids_limit": int(process_ceiling)}))
+                                  "container": sys.argv[3], "pids_limit": int(process_ceiling),
+                                  "memory_limit_bytes": memory_ceiling}))
     config.chmod(0o644)
     sudo = Path("/etc/sudoers.d/usevps-gateway")
     content = 'Defaults:usevps env_keep += "SSH_ORIGINAL_COMMAND"\nusevps ALL=(root) NOPASSWD: /usr/local/libexec/usevps-gateway ""\n'

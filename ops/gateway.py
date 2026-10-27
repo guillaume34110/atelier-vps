@@ -27,6 +27,9 @@ def main():
     process_ceiling = config.get('pids_limit', 512)
     if type(process_ceiling) is not int or process_ceiling not in (512, 768):
         raise ValueError('unsupported operator process ceiling')
+    memory_ceiling = config.get('memory_limit_bytes', 5 * 1024 ** 3)
+    if type(memory_ceiling) is not int or not 64 * 1024 ** 2 <= memory_ceiling <= 48 * 1024 ** 3:
+        raise ValueError('unsupported operator memory ceiling')
     settings = Path('/etc/atelier-vps-team.json')
     tenant = None
     pending = False
@@ -54,7 +57,7 @@ def main():
         raise ValueError("worker is not healthy yet")
     host = info["HostConfig"]
     mounts = info["Mounts"]
-    if host["Privileged"] or not host["ReadonlyRootfs"] or not 0 < host["Memory"] <= 5 * 1024 ** 3:
+    if host["Privileged"] or not host["ReadonlyRootfs"] or not 0 < host["Memory"] <= memory_ceiling:
         raise ValueError("worker isolation or memory limit missing")
     if host.get("MemorySwap") != host["Memory"] or not 0 < host.get("PidsLimit", 0) <= process_ceiling or not 0 < host.get("CpuShares", 0) <= 128:
         raise ValueError("worker swap, process or CPU limits missing")

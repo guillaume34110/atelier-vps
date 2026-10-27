@@ -20,8 +20,11 @@ lecture seule dans l'image, à `/app/AGENTS.md`.
   3 600 secondes. Les sources, dépendances,
   téléchargements, caches et résultats comptent dans le budget.
 - Conserver le compte 10001:10001, la racine en lecture seule, les capacités
-  supprimées, le refus des nouveaux privilèges, la RAM maximale de 5 Gio sans
-  swap supplémentaire, la réserve hôte de 1 Gio et la priorité basse. Ne pas
+  supprimées, le refus des nouveaux privilèges, la priorité basse et aucun swap
+  supplémentaire. Les valeurs par défaut restent 5 Gio de RAM et 1 Gio de réserve
+  hôte. Un opérateur peut dimensionner un serveur explicitement autorisé jusqu'à
+  48 Gio via sa configuration racine ; garder une réserve hôte adaptée aux autres
+  services et l'admission dynamique. Les installations existantes restent inchangées. Ne pas
   modifier Docker, Coolify, le système ou les réglages des autres projets.
 - Réutiliser les logiciels Ubuntu 24.04 de `.usevps-dev` montés en lecture seule,
   conformément à `ops/toolchain-lock.json`. Node 22/pnpm, Python 3.12/uv, Java 17/
