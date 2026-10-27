@@ -191,9 +191,16 @@ def allocatable_ram(state):
     return max(0, available + current_used - state.get('host_ram_reserve_bytes', team.GIB))
 
 
+def effective_capacity(state):
+    capacity = dict(state['capacity'])
+    # The original slot ceiling described one worker, not all team workers.
+    capacity['slots'] = max(capacity['slots'], min(16, int(capacity['cpus'])))
+    return capacity
+
+
 def preview(state, policy):
     base = read(BASE); verify_mount(base)
-    limits = team.allocations(policy, state['capacity'])
+    limits = team.allocations(policy, effective_capacity(state))
     cores = sorted(os.sched_getaffinity(0)) if hasattr(os, 'sched_getaffinity') else list(range(os.cpu_count() or 1))
     masks = team.cpu_sets(policy, limits, cores)
     for name, limit in limits.items():
@@ -373,7 +380,7 @@ def main():
             result = {'revision': team.revision(state['policy']), 'policy': state['policy'],
                       'server_id': identity,
                       'owner_public_key': state['owner_public_key'],
-                      'capacity': state['capacity'], 'tenants': state['tenants'],
+                      'capacity': effective_capacity(state), 'tenants': state['tenants'],
                       'overview': overview(state),
                       'pending': read(PENDING) if PENDING.exists() else None,
                       'host_ram_reserve_bytes': state.get('host_ram_reserve_bytes', team.GIB), 'allocatable_ram_bytes': allocatable_ram(state)}

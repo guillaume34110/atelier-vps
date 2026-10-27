@@ -9,7 +9,7 @@ struct AdminPool: Codable, Equatable {
     var slots: Int
 
     var valid: Bool {
-        cpus.isFinite && cpus >= 0.01 && cpus <= 4096 && ram_bytes > 0 && disk_bytes > 0 && (1...4).contains(slots)
+        cpus.isFinite && cpus >= 0.01 && cpus <= 4096 && ram_bytes > 0 && disk_bytes > 0 && (1...16).contains(slots)
     }
 }
 
@@ -43,7 +43,7 @@ struct AdminPolicy: Codable, Equatable {
     mutating func selectMode(_ value: String, capacity: AdminPool, allocatableRAM: Int?) {
         mode = value
         if value == "opportunistic", let owner = users.firstIndex(where: { $0.id == "owner" }) {
-            pool.cpus = capacity.cpus; pool.ram_bytes = capacity.ram_bytes; pool.slots = capacity.slots
+            pool.cpus = capacity.cpus; pool.ram_bytes = capacity.ram_bytes; pool.slots = min(4, capacity.slots)
             for index in users.indices { users[index].enabled = index == owner }
             users[owner].cpu_percent = 100; users[owner].ram_percent = 100; users[owner].slots = pool.slots
             // Disabled members keep their data and disk quota.
@@ -199,7 +199,7 @@ final class Administration: ObservableObject {
             draft.users[index].cpu_percent = share; draft.users[index].ram_percent = share
             draft.users[index].disk_percent = floor(disk * 100 / Double(active.count)) / 100
             let cpuSlots = max(1, Int(ceil(draft.pool.cpus * share / 100)))
-            draft.users[index].slots = min(cpuSlots, max(1, draft.pool.slots / active.count))
+            draft.users[index].slots = min(4, cpuSlots, max(1, draft.pool.slots / active.count))
         }
         plan = nil; notice = L("Adjust the shares, preview and apply, then copy the member’s invitation.")
     }
@@ -296,6 +296,19 @@ func runAdminChecks() throws {
         AdminUser(id: "owner", cpu_percent: 50, ram_percent: 50, disk_percent: 50, slots: 2),
         AdminUser(id: "alice", public_key: "ssh-ed25519 public-fixture", cpu_percent: 50, ram_percent: 50, disk_percent: 50, slots: 2)])
     try policy.validate()
+    var teamPolicy = policy
+    let teamCapacity = AdminPool(cpus: 6, ram_bytes: 48 * 1073741824, disk_bytes: 76 * 1073741824, slots: 6)
+    teamPolicy.pool = teamCapacity
+    teamPolicy.users[0].slots = 3; teamPolicy.users[1].slots = 3
+    try teamPolicy.validate()
+    let teamState = try AdminState.decode(JSONSerialization.data(withJSONObject: [
+        "revision": String(repeating: "a", count: 64),
+        "policy": try JSONSerialization.jsonObject(with: JSONEncoder().encode(teamPolicy)),
+        "capacity": try JSONSerialization.jsonObject(with: JSONEncoder().encode(teamCapacity))]))
+    precondition(teamState.capacity.slots == 6 && teamState.policy.users.map(\.slots) == [3, 3])
+    teamPolicy.selectMode("opportunistic", capacity: teamCapacity, allocatableRAM: nil)
+    precondition(teamPolicy.pool.slots == 4 && teamPolicy.users[0].slots == 4)
+    try teamPolicy.validate()
     policy.selectMode("opportunistic", capacity: pool, allocatableRAM: 3 * 1073741824)
     precondition(policy.users[0].cpu_percent == 100 && policy.users[0].slots == 4 && !policy.users[1].active)
     precondition(policy.users[1].disk_percent == 50 && policy.users[0].disk_percent == 50)

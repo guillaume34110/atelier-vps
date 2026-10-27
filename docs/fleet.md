@@ -64,8 +64,9 @@ atelier-vps run --source ./api --agent 'API tests' --cpus 1 \
   --ram-gib auto --disk-gib 1 --timeout 600 -- npm test
 ```
 
-Use `--arch aarch64`, `x86_64` or `any` according to the workload. ARM64 is the
-default. Source filtering, actual admission and all task limits still apply.
+Use `--arch aarch64`, `x86_64` or `any` according to the workload. The default
+`any` considers both architectures; pin one for architecture-specific binaries
+or dependencies. Source filtering, admission and all task limits still apply.
 The result includes a reference such as `paris:JOB_ID`; keep that complete
 reference for `fetch` and `release`. Changing the selected server never changes
 where an old result lives. Disabling a connection retains its keys and results.

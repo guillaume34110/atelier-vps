@@ -3,7 +3,7 @@
 <p align="center">
 <a href="https://github.com/guillaume34110/atelier-vps/actions/workflows/ci.yml"><img src="https://github.com/guillaume34110/atelier-vps/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
 <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-eee5cf" alt="MIT license"></a>
-<img src="https://img.shields.io/badge/Linux-ARM64-4265b2" alt="Linux ARM64">
+<img src="https://img.shields.io/badge/Linux-ARM64%20%7C%20x86__64-4265b2" alt="Linux ARM64 and x86_64">
 <img src="https://img.shields.io/badge/MCP-local%20stdio-d7664d" alt="MCP over local stdio">
 </p>
 
@@ -51,7 +51,9 @@ atelier-vps run --source ./my-project --agent "Tests · API" \
 
 Sources are filtered and streamed without a second local archive. Local
 dependencies, Git history, common secret files and generated outputs are
-excluded. Recreate dependencies from lockfiles for Linux ARM64.
+excluded. Recreate dependencies from lockfiles for the selected Linux architecture.
+Portable work can use either architecture; pin `--arch aarch64` or `--arch x86_64`
+when its dependencies or outputs require one.
 
 RAM `auto` learns this workload's observed peak and adds headroom; new workloads
 start conservatively. Explicit GiB remain available. Admission never silently
@@ -80,7 +82,7 @@ The legacy `usevps` launcher can keep pointing to the same client.
 | CPU | Reserve whole cores; idle cores are lent and reassigned as jobs join or leave. |
 | RAM | Learn a measured peak plus headroom, or reserve explicit GiB; admission protects real host capacity. |
 | Disk | Reserve the complete peak: sources, dependencies, caches, logs and results. |
-| Jobs | Up to four, subject to actual CPU, RAM and disk capacity. |
+| Jobs | Up to four per developer worker, subject to actual CPU, RAM and disk capacity. |
 | Neighbors | Low CPU priority, a host RAM floor and container limits protect other projects. |
 | Maintenance | An exclusive deployment lock waits for active jobs to finish. |
 

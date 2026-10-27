@@ -81,7 +81,9 @@ class Fleet(unittest.TestCase):
 
     def test_architecture_and_unknown_server_identity_are_not_guessed(self):
         self.states['lyon-worker']['telemetry']['arch']='x86_64'
-        self.assertEqual(vps.select_server(self.request)['id'],'paris')
+        self.assertEqual(vps.select_server(self.request)['id'],'lyon')
+        self.calls.clear()
+        self.assertEqual(vps.select_server(self.request,arch='aarch64')['id'],'paris')
         self.assertFalse(any(h=='lyon-worker' and op=='plan' for h,op,_ in self.calls))
         del self.states['paris-worker']['server_id']
         result=vps.fleet_status()
@@ -93,6 +95,13 @@ class Fleet(unittest.TestCase):
         result=vps.fleet_status()
         self.assertEqual(result['global']['servers_connected'],1)
         self.assertEqual(result['global']['ram_available'],3*vps.GIB)
+
+    def test_portable_default_refuses_unknown_architectures(self):
+        self.states['paris-worker']['telemetry']['arch'] = None
+        self.states['lyon-worker']['telemetry']['arch'] = 'unsupported'
+        with self.assertRaisesRegex(RuntimeError, 'architecture'):
+            vps.select_server(self.request)
+        self.assertFalse(any(op in {'plan', 'run'} for _, op, _ in self.calls))
 
     def test_job_references_keep_disabled_servers_and_reject_cross_server_use(self):
         self.profiles[0]['enabled']=False

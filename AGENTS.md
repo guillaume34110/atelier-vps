@@ -4,9 +4,9 @@ Lire `README.md` avant une modification. Ces règles sont également incluses en
 lecture seule dans l'image, à `/app/AGENTS.md`.
 
 - Utiliser le compte SSH restreint et le client fournis. Vérifier le statut réel
-  avant une tâche ; conserver les réservations atomiques, au plus quatre tâches et
+  avant une tâche ; conserver les réservations atomiques, au plus quatre tâches par worker et
   l'attente bornée. Aucun shell hôte, socket Docker ou autre worker de débordement.
-- Privilégier ce pool pour les travaux compatibles Linux ARM64 ; utiliser les
+- Privilégier les pools pour les travaux compatibles Linux ARM64 ou x86_64 ; utiliser les
   outils MCP `atelier-vps` quand ils sont disponibles. Déclarer CPU et pic disque.
   Utiliser `--ram-gib auto`, ou omettre `ram_gib` dans MCP, pour réutiliser les pics
   mesurés avec marge. Déclarer un pic RAM explicite connu pour un travail nouveau

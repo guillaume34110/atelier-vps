@@ -16,6 +16,8 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual({t.name for t in tools.tools}, {'vps_status', 'vps_run', 'vps_fetch', 'vps_release',
                     'admin_settings_get', 'admin_settings_preview', 'admin_settings_apply', 'admin_invitation_create',
                     'vps_server_add','vps_connect_from_clipboard', 'vps_agent_desktop'})
+                run = next(tool for tool in tools.tools if tool.name == 'vps_run')
+                self.assertEqual(run.input_schema['properties']['arch']['default'], 'any')
                 result = await client.call_tool('vps_status')
                 self.assertFalse(result.is_error)
                 self.assertTrue(result.structured_content['ok'])

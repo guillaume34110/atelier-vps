@@ -91,8 +91,8 @@ def vps_connect_from_clipboard() -> dict[str, Any]:
 @server.tool(structured_output=True)
 def vps_run(source: str, argv: list[str], agent: str, disk_gib: float,
             ram_gib: float | None = None, cpus: int = 1, timeout: int = 900,
-            server: str | None = None, arch: str = 'aarch64') -> dict[str, Any]:
-    """Run a Linux ARM64 task, streaming filtered sources without a local archive.
+            server: str | None = None, arch: str = 'any') -> dict[str, Any]:
+    """Run a Linux task, streaming filtered sources without a local archive.
 
     Reserve the full peak, including dependencies, caches, downloads and outputs.
     At most 4 jobs share the pool; unused cores are lent. This call waits for the
@@ -102,7 +102,8 @@ def vps_run(source: str, argv: list[str], agent: str, disk_gib: float,
     headroom (first run: up to 1 GiB). Explicit RAM overrides are respected.
     RAM is never silently reduced to fit a busy pool. New/heavier work should
     reserve its known full peak; dependency-lock changes start a new profile.
-    Without server, select an authenticated compatible worker that can admit
+    Pin arch to aarch64 or x86_64 for architecture-specific work. Without
+    server, select an authenticated compatible worker that can admit
     this complete claim. Use the returned job_ref for fetch/release. A failed
     executed command is never automatically retried on another server.
     """

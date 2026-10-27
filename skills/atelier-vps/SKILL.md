@@ -1,13 +1,16 @@
 ---
 name: atelier-vps
-description: Prefer the configured shared VPS for Linux ARM64 builds, tests, Chromium, type checks and file processing; reserve resources and preserve verified results.
+description: Prefer the configured shared VPS for compatible Linux builds, tests, Chromium, type checks and file processing; reserve resources and preserve verified results.
 ---
 
 Use the `atelier-vps` MCP tools whenever a compatible development task can run on
-the configured VPS, especially when local memory is under pressure. Check
+the configured VPS, without waiting for local memory pressure. Check
 `vps_status` first. Only proceed with healthy admission and enough available CPU,
 RAM and disk for the complete peak. Busy can be true while admission is true:
 several agents can share the pool.
+
+Portable tasks default to either architecture; pin `arch="aarch64"` or
+`arch="x86_64"` when dependencies or outputs are architecture-specific.
 
 Call `vps_run` with the actual source directory, an argument array, a short public
 agent label and explicit CPU, disk and timeout reservations. Omit `ram_gib` in MCP
@@ -19,13 +22,13 @@ reserve explicit RAM for new/heavier work with a known peak. Never shrink a clai
 just to fit free RAM, or automatically retry an arbitrary command after failure.
 Inspect `ram_peak_bytes` and the actual admission diagnostics, not final RSS or
 the 5 GiB ceiling as if it were free capacity. The service
-supports at most four simultaneous jobs; reserve only what the task needs. Idle
+supports at most four simultaneous jobs per developer worker; reserve only what the task needs. Idle
 CPU cores are lent automatically. Never bypass refused admission with another
 worker, root SSH, Docker or a virtual machine.
 
 Sources are filtered and streamed. Never transfer secrets, private SSH keys,
 environments, local dependencies, Git history or `CLAUDE.md`. Recreate Linux
-ARM64 dependencies from lockfiles and use the existing shared toolchain/caches.
+dependencies for the selected architecture from lockfiles and use the existing shared toolchain/caches.
 Managed dependency caches follow the project and lockfile digest; each use keeps
 that scope for another 30 days. Do not store sources, results, credentials or
 irreplaceable files in these disposable caches. Base tools remain installed.
