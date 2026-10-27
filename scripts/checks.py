@@ -92,6 +92,14 @@ def compose_deployments():
     assert str(large['environment']['USEVPS_HOST_RAM_RESERVE_GIB']) == '8'
     protected = lambda spec: {k: v for k, v in spec.items() if k not in {'mem_limit', 'memswap_limit', 'environment'}}
     assert protected(large) == protected(cloud_defaults), 'sizing RAM must preserve every other worker protection'
+    cpu = service('docker-compose.coolify.yaml', {**os.environ, 'USEVPS_CPU_QUOTA': '600000',
+                  'USEVPS_CPU_LIMIT': '6', 'USEVPS_MAX_CPUS': '6'})
+    assert cpu['cpu_quota'] == 600000 and cpu['cpu_period'] == 100000 and cpu['cpu_shares'] == 128
+    assert str(cpu['environment']['USEVPS_CPU_LIMIT']) == str(cpu['environment']['USEVPS_MAX_CPUS']) == '6'
+    cpu['cpu_quota'] = cloud_defaults['cpu_quota']
+    for key in ('USEVPS_CPU_LIMIT', 'USEVPS_MAX_CPUS'):
+        cpu['environment'][key] = cloud_defaults['environment'][key]
+    assert cpu == cloud_defaults, 'sizing CPU must preserve every other worker protection'
     print('Coolify Compose protections and nine literal dedicated-volume binds: passed', flush=True)
     return cloud_pids
 

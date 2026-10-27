@@ -115,6 +115,11 @@ current host availability, the host reserve, controller overhead and existing
 claims. For example, 52.7 GiB available with an 8 GiB host reserve makes about
 44.5 GiB reservable, even with a 48 GiB ceiling. Check other services and their
 observed peaks before choosing these values; do not allocate RAM merely to fill it.
+Size CPU explicitly with matching `USEVPS_CPU_LIMIT`, `USEVPS_MAX_CPUS` and
+`USEVPS_CPU_QUOTA` (cores multiplied by 100000). For example, `6`, `6` and
+`600000` cap an eight-vCPU host at six vCPU for jobs, leaving two vCPU of CPU
+time for the host. The default remains four. Keep the low CPU shares and job
+priority so other services retain precedence under contention.
 It grants only the fixed gateway command, not arbitrary sudo, an interactive
 host shell or Docker access.
 

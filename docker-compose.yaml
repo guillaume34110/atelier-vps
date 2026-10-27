@@ -26,6 +26,7 @@ services:
       - USEVPS_TENANT=${USEVPS_TENANT:-owner}
       - USEVPS_MODE=${USEVPS_MODE:-opportunistic}
       - USEVPS_CPU_LIMIT=${USEVPS_CPU_LIMIT:-4}
+      - USEVPS_MAX_CPUS=${USEVPS_MAX_CPUS:-4}
       - USEVPS_MAX_JOBS=${USEVPS_MAX_JOBS:-4}
       - USEVPS_POOL_RAM_GIB=${USEVPS_POOL_RAM_GIB:-5}
     # Configure the nine explicit binds in Coolify, or generate a local override.
