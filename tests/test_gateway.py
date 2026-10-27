@@ -58,10 +58,22 @@ class GatewayTests(unittest.TestCase):
             ('status', False, good, 768, False, 1024),
             ('status', False, good, 512, False, True),
             ('status', False, good, 512, False, '768')]
-        for operation, writable, temporary, pids, allowed, configured in cases:
+        cases = [(*row, None, 5 * 1024 ** 3) for row in cases] + [
+            ('status', False, good, 512, False, None, None, 48 * 1024 ** 3),
+            ('status', False, good, 768, True, 768, 48 * 1024 ** 3, 48 * 1024 ** 3),
+            ('desktop', False, good, 768, True, 768, 48 * 1024 ** 3, 48 * 1024 ** 3),
+            ('status', False, good, 768, False, 768, 48 * 1024 ** 3, 49 * 1024 ** 3),
+            ('status', False, good, 768, False, 768, 49 * 1024 ** 3, 48 * 1024 ** 3),
+            ('status', False, good, 512, False, None, True, 5 * 1024 ** 3),
+            ('status', False, good, 512, False, None, '48', 5 * 1024 ** 3)]
+        for operation, writable, temporary, pids, allowed, configured, memory_ceiling, memory in cases:
             config.pop('pids_limit', None)
+            config.pop('memory_limit_bytes', None)
             if configured is not None:
                 config['pids_limit'] = configured
+            if memory_ceiling is not None:
+                config['memory_limit_bytes'] = memory_ceiling
+            host['Memory'] = host['MemorySwap'] = memory
             mounts[1]["RW"] = writable
             host['Tmpfs'] = temporary
             host['PidsLimit'] = pids
