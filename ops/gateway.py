@@ -24,6 +24,9 @@ def main():
     if operation not in {"status", "plan", "run", "fetch", "release", "desktop"}:
         raise ValueError("unsupported worker operation")
     config = json.loads(Path("/etc/usevps-gateway.json").read_text())
+    process_ceiling = config.get('pids_limit', 512)
+    if type(process_ceiling) is not int or process_ceiling not in (512, 768):
+        raise ValueError('unsupported operator process ceiling')
     settings = Path('/etc/atelier-vps-team.json')
     tenant = None
     pending = False
@@ -53,14 +56,14 @@ def main():
     mounts = info["Mounts"]
     if host["Privileged"] or not host["ReadonlyRootfs"] or not 0 < host["Memory"] <= 5 * 1024 ** 3:
         raise ValueError("worker isolation or memory limit missing")
-    if host.get("MemorySwap") != host["Memory"] or not 0 < host.get("PidsLimit", 0) <= 512 or not 0 < host.get("CpuShares", 0) <= 128:
+    if host.get("MemorySwap") != host["Memory"] or not 0 < host.get("PidsLimit", 0) <= process_ceiling or not 0 < host.get("CpuShares", 0) <= 128:
         raise ValueError("worker swap, process or CPU limits missing")
     if "ALL" not in (host.get("CapDrop") or []) or not any(x.startswith("no-new-privileges") for x in host.get("SecurityOpt") or []):
         raise ValueError("worker privilege restrictions missing")
     temporary = host.get('Tmpfs') or {}
     if (temporary not in ({}, {'/tmp': DESKTOP_TMPFS})
             or host['PidsLimit'] > 256 and not temporary
-            or operation == 'desktop' and (not temporary or host['PidsLimit'] != 512)):
+            or operation == 'desktop' and (not temporary or host['PidsLimit'] != process_ceiling)):
         raise ValueError('unexpected temporary filesystem or missing bounded GUI process capacity')
     if tenant:
         if host['Memory'] != tenant['ram_bytes']:

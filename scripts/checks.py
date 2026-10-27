@@ -68,25 +68,24 @@ def ssh_frontends(parent):
 
 
 def compose_deployments():
-    env = {**os.environ, 'USEVPS_VOLUME_MOUNT': '/ci-atelier-vps'}
     def service(file):
         return json.loads(command(['docker', 'compose', '-f', file, 'config', '--format', 'json'],
-                                  cwd=REPO, env=env))['services']['worker']
+                                  cwd=REPO))['services']['worker']
     base, cloud = service('docker-compose.yaml'), service('docker-compose.coolify.yaml')
     mounts = cloud.pop('volumes')
     base.pop('volumes', None)
+    base_pids, cloud_pids = base.pop('pids_limit'), cloud.pop('pids_limit')
+    assert base_pids == 512 and cloud_pids == 768, 'preserve legacy limit and calibrated Cloud process headroom'
     assert cloud == base, 'Coolify manifest must preserve all canonical worker protections'
     expected = {}
-    for value in bindings({'volume_mount': env['USEVPS_VOLUME_MOUNT']}):
+    for value in bindings({'volume_mount': '/mnt/atelier-vps'}):
         source, target, *options = value.split(':')
         expected[target] = ('bind', source, options == ['ro'])
     actual = {v['target']: (v['type'], v['source'], v.get('read_only', False)) for v in mounts}
     assert len(mounts) == 9 and actual == expected, 'nine exact dedicated-volume binds required'
-    missing = {k: v for k, v in os.environ.items() if k != 'USEVPS_VOLUME_MOUNT'}
-    refused = subprocess.run(['docker', 'compose', '-f', 'docker-compose.coolify.yaml', 'config', '--quiet'],
-                             cwd=REPO, env=missing, capture_output=True)
-    assert refused.returncode and b'USEVPS_VOLUME_MOUNT' in refused.stderr, 'missing volume must fail before deployment'
-    print('Portable Coolify Compose protections, nine binds and missing-volume refusal: passed', flush=True)
+    assert all('$' not in v['source'] for v in mounts), 'Coolify rejects interpolation in bind sources'
+    print('Coolify Compose protections and nine literal dedicated-volume binds: passed', flush=True)
+    return cloud_pids
 
 
 def main():
@@ -112,7 +111,7 @@ def main():
                      "/lib64": "usr/lib64", "/etc": "etc", "/opt": "opt"}.items():
         mounts.extend(["--volume", str(dev / src) + ":" + dst + ":ro"])
     command(["docker", "compose", "-f", "docker-compose.yaml", "config", "--quiet"], cwd=REPO)
-    compose_deployments()
+    ci_pids = compose_deployments()
     command(["docker", "build", "-t", "usevps:checks", "."], cwd=REPO)
     image = json.loads(command(['docker', 'image', 'inspect', 'usevps:checks']))[0]['Id']
     print("Container build: passed", flush=True)
@@ -139,7 +138,7 @@ def main():
         process = subprocess.Popen(["docker", "run", "--rm", "--name", name, "--read-only",
                                     "--tmpfs", '/tmp:' + DESKTOP_TMPFS,
                                     "--cap-drop=ALL", "--security-opt=no-new-privileges:true", "--memory=3g",
-                                    "--memory-swap=3g", "--pids-limit=512", "--cpus=2", "--cpu-shares=128", *mounts,
+                                    "--memory-swap=3g", "--pids-limit=" + str(ci_pids), "--cpus=2", "--cpu-shares=128", *mounts,
                                     "--publish", "127.0.0.1::8080", "--volume", str(workspace) + ":/workspace",
                                     "--volume", str(capacity) + ":/volume-stat:ro", "--env", "USEVPS_VOLUME_STATS=/volume-stat",
                                     "--env", "USEVPS_VOLUME_ID=ci-volume", image],
@@ -170,7 +169,8 @@ def main():
                                   cwd=REPO, env=cpu_env))['services']['worker']
         assert spec['tmpfs'] == ['/tmp:' + DESKTOP_TMPFS], spec['tmpfs']
         assert info['HostConfig']['Tmpfs'] == {'/tmp': DESKTOP_TMPFS}
-        assert spec['pids_limit'] == info['HostConfig']['PidsLimit'] == 512
+        assert spec['pids_limit'] == 512
+        assert info['HostConfig']['PidsLimit'] == ci_pids
         assert spec['cpu_period'] == 100000 and spec['cpu_quota'] == 50000
         cpu_name = 'usevps-cpu-spec-' + uuid.uuid4().hex[:10]
         spec.pop('build', None)

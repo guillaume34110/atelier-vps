@@ -47,9 +47,11 @@ loopback listener. No VNC port is published. Its temporary password is supplied
 privately to the system viewer and never returned by MCP or written to logs.
 An 8 MiB, non-executable temporary filesystem holds X server locks; it is owned
 by the restricted worker user and counts within the existing container RAM limit.
-The worker allows at most 512 processes/threads, including its control requests:
-the GUI startup reaches the former 256 limit before exhausting RAM. The CPU,
-RAM, job-count and disk limits remain enforced.
+The original Compose worker allows 512 processes/threads, including control
+requests. The Coolify Cloud manifest allows 768: real desktop startup on x86_64
+can exceed 512 before exhausting RAM. The real startup check rejects PID refusals
+and verifies 32 spare slots at the measured peak. CPU, RAM, job-count and disk
+limits remain enforced; existing workers keep their configured limit.
 The agent tool `vps_agent_desktop` supports status/start and a confirmed stop;
 it never returns a login code or viewer ticket.
 

@@ -124,7 +124,9 @@ def capture_session(ident):
     process_limit = int((pids / 'pids.max').read_text())
     process_count = int((pids / 'pids.current').read_text())
     limit_hits = int(dict(x.split() for x in (pids / 'pids.events').read_text().splitlines())['max'])
-    assert process_limit == 512 and process_count <= process_limit - 32 and limit_hits == 0, 'GUI must leave control-plane process headroom'
+    process_peak = int((pids / 'pids.peak').read_text()) if (pids / 'pids.peak').exists() else process_count
+    assert process_limit in (512, 768) and max(process_count, process_peak) <= process_limit - 32 and limit_hits == 0, (
+        f'GUI must leave control-plane process headroom: current={process_count}, peak={process_peak}, limit={process_limit}, hits={limit_hits}')
     private = io.StringIO()
     with redirect_stdout(private):
         desktop.dispatch({'action': 'ticket', 'id': ident})
@@ -153,7 +155,7 @@ def capture_session(ident):
                 process.kill(); process.wait(timeout=3)
     result.update(status='passed', provider=state['provider'], transport='worker desktop stdio bridge',
                   account_provided=False, provider_sign_in_verified=False, inference_api_key_configured=False,
-                  process_limit=process_limit, processes_at_capture=process_count, process_limit_hits=limit_hits)
+                  process_limit=process_limit, processes_at_capture=process_count, process_peak=process_peak, process_limit_hits=limit_hits)
     (worker.job_path(ident) / 'work/desktop-proof.json').write_text(json.dumps(result, indent=2))
     print(json.dumps({'capture': 'passed', 'provider': state['provider']}))
 

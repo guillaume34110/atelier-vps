@@ -115,7 +115,9 @@ def capacity():
     q = os.statvfs(ROOT)
     workspace_free = q.f_bavail * q.f_frsize
     reserve = int(float(os.environ.get("USEVPS_RESERVE_GIB", "0.5")) * GIB)
-    budget = min(TOTAL_LIMIT, q.f_blocks * q.f_frsize)
+    budget = q.f_blocks * q.f_frsize
+    if q.f_blocks >= s.f_blocks:
+        budget = min(TOTAL_LIMIT, budget)
     # With an ext4 project quota these counters include caches and file metadata.
     used = ((q.f_blocks - q.f_bfree) * q.f_frsize
             if q.f_blocks < s.f_blocks else usage(ROOT))
@@ -301,8 +303,8 @@ def validate_job_request(request):
         raise ValueError("argv must be a nonempty string array")
     if not isinstance(timeout, int) or not 1 <= timeout <= 3600:
         raise ValueError("timeout must be 1..3600 seconds")
-    if not isinstance(peak, int) or not 0 < peak <= JOB_LIMIT:
-        raise ValueError("declared disk peak must fit the dedicated volume (maximum 32 GiB)")
+    if not isinstance(peak, int) or peak <= 0 or peak > JOB_LIMIT and peak > capacity()['budget_bytes']:
+        raise ValueError("declared disk peak must fit the dedicated volume")
     return argv, timeout, peak
 
 

@@ -50,7 +50,18 @@ class GatewayTests(unittest.TestCase):
                  ('status', False, {}, 512, False), ('status', False, good, 768, False),
                  ('status', False, {'/tmp': gateway.DESKTOP_TMPFS + ',size=1g'}, 512, False),
                  ('desktop', False, {**good, '/run': 'rw'}, 512, False)]
-        for operation, writable, temporary, pids, allowed in cases:
+        cases = [(*row, None) for row in cases] + [
+            ('status', False, good, 768, True, 768),
+            ('desktop', False, good, 768, True, 768),
+            ('desktop', False, good, 512, False, 768),
+            ('status', False, good, 769, False, 768),
+            ('status', False, good, 768, False, 1024),
+            ('status', False, good, 512, False, True),
+            ('status', False, good, 512, False, '768')]
+        for operation, writable, temporary, pids, allowed, configured in cases:
+            config.pop('pids_limit', None)
+            if configured is not None:
+                config['pids_limit'] = configured
             mounts[1]["RW"] = writable
             host['Tmpfs'] = temporary
             host['PidsLimit'] = pids
