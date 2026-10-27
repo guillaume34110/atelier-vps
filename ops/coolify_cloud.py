@@ -167,7 +167,8 @@ class CloudTeam:
         if not is_owner:
             if not re.fullmatch('[a-z0-9]{8,64}', application):
                 raise ValueError('invalid member service identity')
-            self.member(self.api('services/' + application), tenant, owner)
+            service = self.api('services/' + application)
+            self.member(service, tenant, owner)
         if action == 'configure':
             if is_owner:
                 self.prepare_network('owner', 'atelier-vps-owner')
@@ -183,7 +184,10 @@ class CloudTeam:
                     'instant_deploy': False}, 'PATCH')
             return {'id': application, 'commit': self.config['approved_revision'], 'configured': True}
         if action == 'deploy':
-            return self.api('deploy', {'uuid': application, 'force': False}) if is_owner else self.api('services/' + application + '/start', {})
+            if is_owner:
+                return self.api('deploy', {'uuid': application, 'force': False})
+            operation = 'restart' if 'running' in str(service.get('status') or '') else 'start'
+            return self.api('services/' + application + '/' + operation, {})
         if action == 'stop':
             return self.api('applications/' + application + '/stop', {}) if is_owner else self.api('services/' + application + '/stop', {})
         raise ValueError('unsupported Cloud team action')

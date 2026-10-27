@@ -48,6 +48,14 @@ class CloudTeamTests(unittest.TestCase):
         result.api = Mock(side_effect=api)
         return result, member
 
+    def test_member_deploy_restarts_running_service_and_starts_stopped_service(self):
+        for status, operation in [('running:healthy', 'restart'), ('exited', 'start')]:
+            with self.subTest(status=status):
+                adapter, member = self.adapter()
+                member['status'] = status
+                adapter.run({**REQUEST, 'action': 'deploy'})
+                adapter.api.assert_any_call('services/' + member['uuid'] + '/' + operation, {})
+
     def test_member_manifest_keeps_hard_limits_private_mounts_and_never_pulls(self):
         worker = cloud.compose(REQUEST, 'sha256:'+'b'*64, 'service12345', 768)['services']['worker']
         self.assertEqual(worker['image'], 'sha256:'+'b'*64)
