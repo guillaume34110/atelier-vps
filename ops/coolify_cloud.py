@@ -132,7 +132,8 @@ class CloudTeam:
 
     def member(self, row, tenant, owner):
         if (row.get('description') != self.marker(tenant)
-                or row.get('server_id') != owner['server_id'] or row.get('environment_id') != owner['environment_id']):
+                or row.get('server_id') != owner['server_id'] or row.get('environment_id') != owner['environment_id']
+                or row.get('connect_to_docker_network', False) is not False):
             raise ValueError('refusing an unrelated Cloud service')
         uuid = row.get('uuid', '')
         if not re.fullmatch('[a-z0-9]{8,64}', uuid):
@@ -154,7 +155,7 @@ class CloudTeam:
             raw = {'services': {'worker': {'image': self.image(), 'pull_policy': 'never', 'command': ['false'], 'network_mode': 'none'}}}
             result = self.api('services', {'name': 'atelier-vps-' + tenant, 'description': self.marker(tenant),
                 'server_uuid': self.config['server_uuid'], 'project_uuid': self.config['project_uuid'],
-                'environment_uuid': self.config['environment_uuid'], 'instant_deploy': False, 'connect_to_docker_network': False,
+                'environment_uuid': self.config['environment_uuid'], 'instant_deploy': False,
                 'docker_compose_raw': base64.b64encode(json.dumps(raw).encode()).decode()})
             if not re.fullmatch('[a-z0-9]{8,64}', result.get('uuid', '')):
                 raise ValueError('invalid created Cloud service identity')
@@ -179,7 +180,7 @@ class CloudTeam:
                 self.prepare_network(tenant, application)
                 raw = compose(request, self.image(), application, self.base.get('pids_limit', 512))
                 self.api('services/' + application, {'docker_compose_raw': base64.b64encode(json.dumps(raw).encode()).decode(),
-                    'connect_to_docker_network': False, 'instant_deploy': False}, 'PATCH')
+                    'instant_deploy': False}, 'PATCH')
             return {'id': application, 'commit': self.config['approved_revision'], 'configured': True}
         if action == 'deploy':
             return self.api('deploy', {'uuid': application, 'force': False}) if is_owner else self.api('services/' + application + '/start', {})
