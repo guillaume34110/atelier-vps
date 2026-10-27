@@ -80,9 +80,23 @@ class CloudTeamTests(unittest.TestCase):
         self.assertEqual(call.args[2], 'PATCH')
         body = call.args[1]
         self.assertFalse(body['instant_deploy'])
-        self.assertFalse(body['connect_to_docker_network'])
+        self.assertNotIn('connect_to_docker_network', body)
         raw = json.loads(base64.b64decode(body['docker_compose_raw']))
         self.assertEqual(raw['services']['worker']['network_mode'], 'service12345')
+
+    def test_create_uses_legacy_cloud_fields_and_leaves_the_service_stopped(self):
+        adapter, member = self.adapter()
+        adapter.run({'action':'create','tenant':'steph','base_application':CONFIG['base_application']})
+        body = next(call.args[1] for call in adapter.api.call_args_list
+                    if call.args[0]=='services' and len(call.args)>1)
+        self.assertNotIn('connect_to_docker_network', body)
+        self.assertFalse(body['instant_deploy'])
+        raw = json.loads(base64.b64decode(body['docker_compose_raw']))
+        self.assertEqual(raw['services']['worker']['network_mode'], 'none')
+        self.assertEqual(raw['services']['worker']['command'], ['false'])
+        member['connect_to_docker_network'] = True
+        with self.assertRaisesRegex(ValueError, 'unrelated'):
+            adapter.run(dict(REQUEST))
 
     def test_owner_stays_git_pinned_and_sets_the_existing_private_owner_manifest(self):
         adapter, _ = self.adapter()
