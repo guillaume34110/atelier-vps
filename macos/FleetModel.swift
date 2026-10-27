@@ -125,6 +125,19 @@ func aggregateServers(_ samples: [ServerSample]) -> (VPSSnapshot, CPUReading)? {
     return (document, CPUReading(host: nil, worker: fraction))
 }
 
+func administratorTarget(_ servers: [ServerSample], selectedID: String?) -> ServerConnection? {
+    func eligible(_ sample: ServerSample) -> Bool {
+        sample.connection.admin_ssh_host != nil && (sample.fresh || sample.connection.server_id != nil)
+            && (servers.count == 1 || sample.identity != nil)
+    }
+    let sample: ServerSample?
+    if let id = selectedID { sample = servers.first { $0.id == id } }
+    else { sample = servers.first(where: eligible) }
+    guard let sample = sample, eligible(sample) else { return nil }
+    var connection = sample.connection; connection.server_id = sample.identity
+    return connection
+}
+
 func runFleetChecks() throws {
     let first = ServerConnection(id: "paris", name: "Paris", team: "Équipe Paris", ssh_host: "paris-worker")
     precondition(first.valid)
@@ -141,6 +154,13 @@ func runFleetChecks() throws {
                  "ram_total": 5000, "disk_available": 6000, "ram_accounting": ["used_bytes": 0]]]
     let snapshot = try VPSSnapshot.decode(JSONSerialization.data(withJSONObject: raw))
     var sample = ServerSample(connection: first); sample.document = snapshot; sample.connected = true
+    var administrator = sample; administrator.connection.admin_ssh_host = "paris-admin"
+    precondition(administratorTarget([sample], selectedID: nil) == nil)
+    precondition(administratorTarget([sample, administrator], selectedID: nil)?.admin_ssh_host == "paris-admin")
+    var member = ServerSample(connection: ServerConnection(id: "member", name: "Member", team: "Paris", ssh_host: "member-worker"))
+    member.document = snapshot; member.connected = true
+    precondition(administratorTarget([member, administrator], selectedID: "member") == nil)
+    precondition(administratorTarget([member, administrator], selectedID: "missing") == nil)
     precondition(countedServers([sample, sample]).count == 1)
     var stale = sample; stale.connected = false
     precondition(countedServers([stale]).isEmpty)

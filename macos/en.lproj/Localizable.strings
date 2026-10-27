@@ -197,3 +197,4 @@
 "Uses a reserved share of the pool. Profiles and files persist; managed tools expire after 30 unused days." = "Uses a reserved share of the pool. Profiles and files persist; managed tools expire after 30 unused days.";
 
 "Agents" = "Agents";
+"Choose a server to manage its team." = "Choose a server to manage its team.";

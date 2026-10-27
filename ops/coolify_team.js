@@ -46,10 +46,11 @@ async function configureTeam(request) {
   await api('/' + id, {...app, name: 'atelier-vps-' + request.tenant, gitCommitHash: base.gitCommitHash,
     dockerComposeFileLocation: '/docker-compose.yaml', dockerComposeConfiguration: JSON.stringify({worker: {port: 8080}})});
   const env = {USEVPS_VOLUME_ID: request.volume_id, USEVPS_VOLUME_STATS: '/volume-stat', USEVPS_RESERVE_GIB: '0.5',
-    USEVPS_HOST_RAM_RESERVE_GIB: '1', USEVPS_TENANT: request.tenant, USEVPS_MODE: request.mode,
+    USEVPS_HOST_RAM_RESERVE_GIB: String((request.host_ram_reserve_bytes || 1073741824) / 1073741824), USEVPS_TENANT: request.tenant, USEVPS_MODE: request.mode,
     USEVPS_MEMORY_LIMIT: String(request.limits.ram_bytes), USEVPS_POOL_RAM_GIB: String(request.limits.ram_bytes / 1073741824),
     USEVPS_CPU_LIMIT: String(request.limits.cpus), USEVPS_CPU_QUOTA: String(Math.round(request.limits.cpus * 100000)),
     USEVPS_CPU_SHARES: String(request.limits.cpu_shares),
+    USEVPS_CPUSET: String(request.cpu_set || ''), USEVPS_MAX_CPUS: String(Math.max(1, Math.ceil(request.limits.cpus))),
     USEVPS_MAX_JOBS: String(request.limits.slots)};
   for (const [name, value] of Object.entries(env)) {
     const secrets = await prisma.secret.findMany({where: {applicationId: id, name}});

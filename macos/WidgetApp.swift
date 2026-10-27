@@ -91,13 +91,7 @@ final class Monitor: ObservableObject {
     }
 
     var administratorConnection: ServerConnection? {
-        let sample = selectedID.flatMap { id in servers.first { $0.id == id } }
-            ?? (servers.count == 1 ? servers.first : nil)
-        guard let sample = sample, sample.connection.admin_ssh_host != nil,
-              sample.fresh || sample.connection.server_id != nil,
-              servers.count == 1 || sample.identity != nil else { return nil }
-        var value = sample.connection; value.server_id = sample.identity
-        return value
+        administratorTarget(servers, selectedID: selectedID)
     }
 
     func setVisible(_ value: Bool) {
@@ -354,7 +348,15 @@ private struct WidgetView: View {
             if monitor.showingAgents {
                 AgentsView(monitor: monitor, control: monitor.agents)
             } else if admin.authorized && admin.showingManagement {
-                AdminView(admin: admin)
+                if monitor.selectedID == nil && monitor.servers.count > 1 {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text(L("Choose a server to manage its team.")).font(.system(size: 12)).foregroundColor(Paint.muted)
+                        FleetServerList(monitor: monitor, admin: admin)
+                        Spacer(minLength: 0)
+                    }
+                } else {
+                    AdminView(admin: admin)
+                }
             } else {
             HStack {
                 Text(L(snapshot?.scope?.mode == "allocated" ? "Your allocation" : "Available capacity"))
