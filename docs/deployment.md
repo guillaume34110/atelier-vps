@@ -102,7 +102,7 @@ python3 ops/install_gateway.py /path/to/public-key.pub ops/gateway.py EXACT_CONT
 This also requires root and the volume variables above. With plain Compose the
 default container is `ateliervps-worker`; Coolify assigns its own application
 container name. The installer refuses conflicting users or authorized keys.
-For the Cloud manifest, set `USEVPS_MOUNT=/mnt/atelier-vps` and
+For the Cloud manifest, set `USEVPS_VOLUME_MOUNT=/mnt/atelier-vps` and
 `USEVPS_PIDS_LIMIT=768` when installing the gateway. Its root-owned configuration
 then expects that process ceiling; existing gateways still default to 512 and
 reject a larger limit. Keep the same verified volume UUID.
