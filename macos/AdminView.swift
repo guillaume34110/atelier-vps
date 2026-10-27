@@ -42,7 +42,7 @@ struct AdminView: View {
                         numberField("CPU (vCPU)", value: $admin.draft.pool.cpus)
                         numberField("RAM (GiB)", value: bytes($admin.draft.pool.ram_bytes))
                         numberField("Storage (GiB)", value: bytes($admin.draft.pool.disk_bytes))
-                        Stepper(value: $admin.draft.pool.slots, in: 1...4) {
+                        Stepper(value: $admin.draft.pool.slots, in: 1...maxPoolSlots) {
                             Text(L("Tasks") + ": \(admin.draft.pool.slots)")
                         }
                     }
@@ -107,7 +107,7 @@ struct AdminView: View {
         .onChange(of: admin.draft) { _ in admin.plan = nil; admin.notice = nil }
         .onChange(of: admin.draft.pool.slots) { slots in
             if admin.draft.mode == "opportunistic", let owner = admin.draft.users.firstIndex(where: { $0.id == "owner" }) {
-                admin.draft.users[owner].slots = slots
+                admin.draft.users[owner].slots = min(4, slots)
             }
         }
     }
@@ -115,6 +115,11 @@ struct AdminView: View {
     private var card: some View {
         RoundedRectangle(cornerRadius: 12).fill(.black.opacity(0.15))
             .overlay(RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.10), lineWidth: 1))
+    }
+
+    private var maxPoolSlots: Int {
+        let capacity = admin.state?.capacity.slots ?? 4
+        return max(admin.draft.pool.slots, admin.draft.mode == "opportunistic" ? min(4, capacity) : capacity)
     }
 
     private func numberField(_ label: String, value: Binding<Double>) -> some View {

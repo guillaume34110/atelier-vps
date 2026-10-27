@@ -14,10 +14,12 @@ class ResourceTests(unittest.TestCase):
     def setUp(self):
         self.stack = ExitStack()
         self.root = Path(self.stack.enter_context(tempfile.TemporaryDirectory()))
+        self.stack.enter_context(patch.object(r, 'MAX_JOBS', 4))
+        self.stack.enter_context(patch.object(r, 'OVERHEAD', 4 * 64 * r.MIB))
         self.stack.enter_context(patch.object(r, 'cpu_capacity', return_value=4))
         self.stack.enter_context(patch.object(r, 'memory_capacity', return_value=4 * r.GIB))
         self.stack.enter_context(patch.object(r, 'process_token', side_effect=lambda pid: f'{pid}:1'))
-        self.stack.enter_context(patch.dict(r.os.environ, {'USEVPS_QUEUE_WAIT_SECONDS': '0'}))
+        self.stack.enter_context(patch.dict(r.os.environ, {'USEVPS_QUEUE_WAIT_SECONDS': '0', 'USEVPS_HOST_RAM_RESERVE_GIB': '1'}))
         self.addCleanup(self.stack.close)
         self.capacity = {'host_available_ram': 7 * r.GIB, 'workspace_free_bytes': 10 * r.GIB,
                          'free_bytes': 12 * r.GIB, 'reserve_bytes': r.GIB // 2}
@@ -58,6 +60,19 @@ class ResourceTests(unittest.TestCase):
             with self.assertRaises(RuntimeError), self.claim('c', disk_bytes=9 * r.GIB):
                 pass
         self.assertEqual(r.view(self.root, self.capacity)['active_count'], 0)
+
+    def test_three_slots_reserve_three_cpus_and_release_independently(self):
+        with patch.object(r, 'MAX_JOBS', 3), patch.object(r, 'OVERHEAD', 3 * 64 * r.MIB), \
+                patch.object(r, 'cpu_capacity', return_value=3):
+            with self.claim('a'), self.claim('b'):
+                with self.claim('c'):
+                    pool = r.view(self.root, self.capacity)
+                    self.assertEqual((pool['active_count'], pool['cpu_available']), (3, 0))
+                    with self.assertRaises(r.AdmissionError) as error, self.claim('d'):
+                        pass
+                    self.assertIn('slots', error.exception.admission['reasons'])
+                self.assertEqual(r.view(self.root, self.capacity)['active_count'], 2)
+            self.assertEqual(r.view(self.root, self.capacity)['active_count'], 0)
 
     def test_host_floor_is_one_gib_and_supervisors_stay_accounted(self):
         self.capacity['host_available_ram'] = 3 * r.GIB

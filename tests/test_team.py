@@ -25,6 +25,35 @@ def policy():
 
 
 class TeamTests(unittest.TestCase):
+    def test_team_capacity_uses_separate_workers_without_overcommitting_cpus(self):
+        stored = {'cpus': 6, 'ram_bytes': 48 * team.GIB, 'disk_bytes': 76 * team.GIB, 'slots': 4}
+        state = {'capacity': stored, 'policy': policy(), 'owner_public_key': KEY,
+                 'tenants': {'owner': {'project_id': 34110}, 'bob': {'project_id': 34111}}}
+        candidate = policy()
+        candidate['pool'] = {'cpus': 6, 'ram_bytes': 44 * team.GIB, 'disk_bytes': 76 * team.GIB, 'slots': 6}
+        for user in candidate['users']:
+            user['slots'] = 3
+        physical = SimpleNamespace(f_bavail=80 * team.GIB, f_frsize=1)
+        usage = {34110: {'used': 0, 'inodes': 0}, 34111: {'used': 0, 'inodes': 0}}
+        with patch.object(settings, 'read', return_value={'mount': '/mnt/data'}), \
+             patch.object(settings, 'verify_mount'), patch.object(settings, 'quota_usage', return_value=usage), \
+             patch.object(settings.os, 'statvfs', return_value=physical), \
+             patch.object(settings.os, 'sched_getaffinity', return_value=set(range(6)), create=True), \
+             patch.object(settings, 'allocatable_ram', return_value=44 * team.GIB):
+            plan = settings.preview(state, candidate)
+        self.assertEqual([plan['allocations'][name]['slots'] for name in ('owner', 'bob')], [3, 3])
+        self.assertEqual([plan['allocations'][name]['cpu_set'] for name in ('owner', 'bob')], ['0,1,2', '3,4,5'])
+        self.assertEqual(plan['affected'], ['bob', 'owner'])
+        self.assertEqual(settings.effective_capacity(state)['slots'], 6)
+        self.assertEqual(stored['slots'], 4)
+        candidate['pool']['slots'] = 7
+        with self.assertRaisesRegex(ValueError, 'pool exceeds server capacity: slots'):
+            team.allocations(candidate, settings.effective_capacity(state))
+        candidate['pool']['slots'] = 6
+        candidate['users'][0]['slots'] = 4
+        with self.assertRaisesRegex(ValueError, 'developer slots exceed'):
+            team.allocations(candidate, settings.effective_capacity(state))
+
     def test_cpu_uses_kernel_quota_precision_and_minimum(self):
         value = policy()
         value['users'][0].update(cpu_percent=33.333333, slots=1)

@@ -2,7 +2,7 @@
 
 **Vos agents. Un serveur. Chacun sa part.**
 
-Atelier VPS déporte les builds, tests et traitements compatibles Linux ARM64
+Atelier VPS déporte les builds, tests et traitements compatibles Linux ARM64 et x86_64
 sur votre propre VPS. Plusieurs agents réservent leur part de CPU, RAM et disque.
 Les cœurs inutilisés sont prêtés aux calculs actifs. Les autres projets gardent
 leur réserve de RAM et la priorité sur le CPU.
@@ -30,7 +30,8 @@ atelier-vps run --source ./mon-projet --agent "Build · frontend" \
 
 Les sources sont filtrées et envoyées sans archive locale supplémentaire.
 Node/Python/Java, Chromium et les outils de compilation sont partagés, en lecture
-seule. Les dépendances sont recréées pour Linux ARM64.
+seule. Les dépendances sont recréées pour l’architecture Linux choisie. Fixez
+`--arch aarch64` ou `--arch x86_64` si le travail dépend d’une architecture.
 Les outils de base restent installés, sans immobiliser leur RAM au repos. Les
 caches de dépendances sont réutilisés par projet et version du verrouillage :
 chaque usage renouvelle leur rétention de 30 jours. Un nettoyage horaire au repos,
@@ -50,7 +51,7 @@ administrateur utilisent une identité distincte, sans droits supplémentaires
 pour les calculs. Voir le [guide des pools et du mode équipe](team.md).
 
 La capacité n’est pas découpée en parts figées inutilisables. Jusqu’à quatre
-calculs cohabitent si leurs réservations tiennent réellement. Le volume dédié
+calculs cohabitent par worker si leurs réservations tiennent réellement. Le volume dédié
 reste disponible après les logiciels et une marge physique de 512 Mio. Les
 résultats conservés occupent de la place : récupérez-les, vérifiez le manifeste
 SHA256 et préservez-les avant leur libération explicite.

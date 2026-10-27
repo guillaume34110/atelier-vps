@@ -218,7 +218,7 @@ def fleet_status(server=None):
     return value
 
 
-def select_server(request, server=None, arch='aarch64'):
+def select_server(request, server=None, arch='any'):
     if arch not in {'aarch64','x86_64','any'}:
         raise ValueError('architecture must be aarch64, x86_64 or any')
     candidates = []
@@ -227,7 +227,8 @@ def select_server(request, server=None, arch='aarch64'):
         if not row['enabled'] or not row['connected'] or row.get('duplicate_of') or row.get('identity_required'):
             continue
         state = row['state']
-        if arch != 'any' and state.get('telemetry',{}).get('arch') != arch:
+        machine_arch = state.get('telemetry',{}).get('arch')
+        if machine_arch not in {'aarch64', 'x86_64'} or arch != 'any' and machine_arch != arch:
             diagnostics.append({'server':row['id'],'reason':'architecture'})
             continue
         if not state.get('admit') or state.get('maintenance'):
@@ -265,7 +266,7 @@ def select_server(request, server=None, arch='aarch64'):
     return selected
 
 
-def run_on_server(request, source, server=None, arch='aarch64'):
+def run_on_server(request, source, server=None, arch='any'):
     selected = select_server(request, server, arch)
     # Persist an explicit environment override before handing out a stable job reference.
     previous=next((row for row in client_config.connections() if row['id']==selected['id']),None)
@@ -410,7 +411,7 @@ def main():
     run.add_argument("--agent", default=os.environ.get("USEVPS_AGENT"), help="Public agent/task label shown in the Mac widget")
     run.add_argument("--cpus", type=int, default=1, help="reserved cores; unused cores are lent to active jobs")
     run.add_argument("--ram-gib", default='auto', help="auto learns measured peaks with headroom; or explicit GiB")
-    run.add_argument('--arch', choices=['aarch64','x86_64','any'], default='aarch64')
+    run.add_argument('--arch', choices=['aarch64','x86_64','any'], default='any')
     run.add_argument("argv", nargs=argparse.REMAINDER)
     fetch = commands.add_parser("fetch")
     fetch.add_argument("id")

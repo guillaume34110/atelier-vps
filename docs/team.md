@@ -10,6 +10,11 @@ This is container isolation for a trusted development team. The host kernel,
 physical disk, network and CPU scheduling remain shared. A percentage is a
 ceiling in an explicit pool, not a guarantee of physical CPU throughput.
 
+The team pool can have more than four task slots when several private workers
+share it. Each developer remains limited to four slots and its CPU, RAM and disk
+allocation. The total slot ceiling is bounded by the configured server CPU
+capacity (or the original worker ceiling, if larger), with at most sixteen slots.
+
 ## RAM that learns from completed work
 
 ```sh
