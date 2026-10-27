@@ -16,6 +16,7 @@ services:
     cpu_period: 100000
     cpu_quota: ${USEVPS_CPU_QUOTA:-400000}
     cpu_shares: ${USEVPS_CPU_SHARES:-128}
+    cpuset: ${USEVPS_CPUSET:-}
     pids_limit: 512
     oom_score_adj: 500
     environment:

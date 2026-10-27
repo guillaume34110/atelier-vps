@@ -73,6 +73,8 @@ def main():
             raise ValueError('worker does not match the developer RAM allocation')
         if tenant.get('network') and set(info.get('NetworkSettings', {}).get('Networks', {})) != {tenant['network']}:
             raise ValueError('worker does not match the private developer network')
+        if 'cpu_set' in tenant and host.get('CpusetCpus', '') != tenant['cpu_set']:
+            raise ValueError('worker does not match the developer CPU core set')
         if state['policy']['mode'] == 'allocated':
             if host['CpuShares'] != tenant['cpu_shares']:
                 raise ValueError('worker does not match the developer CPU priority')

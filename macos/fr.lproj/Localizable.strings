@@ -197,3 +197,4 @@
 "Uses a reserved share of the pool. Profiles and files persist; managed tools expire after 30 unused days." = "Utilise une part réservée du pool. Profils et fichiers conservés ; les outils gérés expirent après 30 jours sans utilisation.";
 
 "Agents" = "Agents";
+"Choose a server to manage its team." = "Choisis un serveur pour gérer son équipe.";

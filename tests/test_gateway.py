@@ -96,3 +96,31 @@ class GatewayTests(unittest.TestCase):
             self.assertEqual(identity,gateway.server_identity())
         with patch.object(gateway.Path, 'read_bytes', return_value=b''):
             with self.assertRaises(ValueError):gateway.server_identity()
+
+    def test_authenticated_team_worker_must_keep_its_assigned_cpu_set(self):
+        from ops.render_compose import bindings
+        config={'mount':'/mnt/volume','workspace':'/mnt/volume/usevps','container':'worker','volume_id':'uuid'}
+        tenant={**config,'ssh_user':'usevps','enabled':True,'ram_bytes':5*1024**3,'cpu_shares':64,'cpus':3,
+                'network':'private','cpu_set':'0,1,2'}
+        state={'policy':{'mode':'allocated'},'tenants':{'owner':tenant}}
+        mounts=[]
+        for item in bindings({'volume_mount':config['mount']}):
+            source,destination,*options=item.split(':')
+            mounts.append({'Type':'bind','Source':source,'Destination':destination,'RW':options!=['ro']})
+        host={'Privileged':False,'ReadonlyRootfs':True,'Memory':5*1024**3,'MemorySwap':5*1024**3,
+              'PidsLimit':512,'CpuShares':64,'CpuQuota':300000,'CpuPeriod':100000,
+              'CapDrop':['ALL'],'SecurityOpt':['no-new-privileges:true'],'Tmpfs':{'/tmp':gateway.DESKTOP_TMPFS}}
+        for actual,allowed in [('0,1,2',True),('3,4,5',False),('',False)]:
+            info=[{'HostConfig':{**host,'CpusetCpus':actual},'Mounts':mounts,
+                   'State':{'Health':{'Status':'healthy'}},'NetworkSettings':{'Networks':{'private':{}}}}]
+            def read(path):return json.dumps(state if path.name=='atelier-vps-team.json' else config)
+            with patch.dict(os.environ,{'SSH_ORIGINAL_COMMAND':'status','SUDO_USER':'usevps'}), \
+                 patch.object(gateway.Path,'exists',autospec=True,side_effect=lambda p:p.name=='atelier-vps-team.json'), \
+                 patch.object(gateway.Path,'read_text',autospec=True,side_effect=read), \
+                 patch.object(gateway.Path,'read_bytes',return_value=b'a'*32), \
+                 patch.object(gateway.subprocess,'check_output',side_effect=['uuid rw,prjquota','worker',json.dumps(info)]), \
+                 patch.object(gateway.os,'execvp') as execute:
+                if allowed:gateway.main();execute.assert_called_once()
+                else:
+                    with self.assertRaisesRegex(ValueError,'CPU core set'):gateway.main()
+                    execute.assert_not_called()

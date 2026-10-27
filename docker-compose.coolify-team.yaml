@@ -1,0 +1,47 @@
+# Cloud owner after team administration is installed. The private bridge is prepared under the settings lock.
+services:
+  worker:
+    container_name: ateliervps-worker
+    build: .
+    restart: unless-stopped
+    user: "10001:10001"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=8388608,mode=0700,uid=10001,gid=10001
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: ${USEVPS_MEMORY_LIMIT:-5g}
+    memswap_limit: ${USEVPS_MEMORY_LIMIT:-5g}
+    cpu_period: 100000
+    cpu_quota: ${USEVPS_CPU_QUOTA:-400000}
+    cpu_shares: ${USEVPS_CPU_SHARES:-128}
+    cpuset: ${USEVPS_CPUSET:-}
+    pids_limit: 768
+    oom_score_adj: 500
+    network_mode: atelier-vps-owner
+    environment:
+      - USEVPS_VOLUME_ID=${USEVPS_VOLUME_ID:-configure-the-added-volume-uuid}
+      - USEVPS_RESERVE_GIB=0.5
+      - USEVPS_HOST_RAM_RESERVE_GIB=${USEVPS_HOST_RAM_RESERVE_GIB:-1}
+      - USEVPS_VOLUME_STATS=/volume-stat
+      - USEVPS_TENANT=${USEVPS_TENANT:-owner}
+      - USEVPS_MODE=${USEVPS_MODE:-opportunistic}
+      - USEVPS_CPU_LIMIT=${USEVPS_CPU_LIMIT:-4}
+      - USEVPS_MAX_CPUS=${USEVPS_MAX_CPUS:-4}
+      - USEVPS_MAX_JOBS=${USEVPS_MAX_JOBS:-4}
+      - USEVPS_POOL_RAM_GIB=${USEVPS_POOL_RAM_GIB:-5}
+    volumes:
+      - /mnt/atelier-vps/usevps:/workspace
+      - /mnt/atelier-vps/.usevps-stat:/volume-stat:ro
+      - /mnt/atelier-vps/.usevps-dev/usr:/usr:ro
+      - /mnt/atelier-vps/.usevps-dev/usr/bin:/bin:ro
+      - /mnt/atelier-vps/.usevps-dev/usr/sbin:/sbin:ro
+      - /mnt/atelier-vps/.usevps-dev/usr/lib:/lib:ro
+      - /mnt/atelier-vps/.usevps-dev/usr/lib64:/lib64:ro
+      - /mnt/atelier-vps/.usevps-dev/etc:/etc:ro
+      - /mnt/atelier-vps/.usevps-dev/opt:/opt:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: 2m
+        max-file: "2"

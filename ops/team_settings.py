@@ -26,6 +26,7 @@ STATE = Path('/etc/atelier-vps-team.json')
 BASE = Path('/etc/usevps-gateway.json')
 PENDING = Path('/etc/atelier-vps-team.pending.json')
 LOCK = Path('/etc/atelier-vps-team.lock')
+CLOUD = Path('/etc/atelier-vps-cloud.json')
 
 
 def command(args, **kwargs):
@@ -136,8 +137,12 @@ def initialize(application, admin_key):
     base = read(BASE); verify_mount(base)
     if not STATE.exists():
         budget = quota_usage(base['mount'])[34110]['limit']
-        capacity = {'cpus': min(4, os.cpu_count()), 'ram_bytes': 5 * team.GIB,
-                    'disk_bytes': budget, 'slots': 4}
+        current = json.loads(command(['docker', 'exec', '-i', '--user', '10001:10001', base['container'], *WORKER_EXEC, 'status']))
+        pool = current['pool']
+        if not current['ok'] or current['scope'] != {'id': 'owner', 'mode': 'opportunistic'}:
+            raise ValueError('initialize from the existing healthy solo owner')
+        capacity = {'cpus': pool['cpu_total'], 'ram_bytes': pool['ram_accounting']['worker_limit_bytes'],
+                    'disk_bytes': budget, 'slots': pool['max_jobs']}
         policy = {'mode': 'opportunistic', 'pool': capacity,
                   'users': [{'id': 'owner', 'cpu_percent': 100, 'ram_percent': 100,
                              'disk_percent': 100, 'slots': 4}]}
@@ -145,6 +150,7 @@ def initialize(application, admin_key):
         index = line.index('ssh-ed25519')
         owner_key = team.public_key(' '.join(line[index:index + 2]))
         save(STATE, {'policy': policy, 'capacity': capacity, 'base_application': application, 'owner_public_key': owner_key,
+                     'host_ram_reserve_bytes': pool['ram_accounting']['host_floor_bytes'],
                      'tenants': {'owner': {**team.allocations(policy, capacity)['owner'],
                         'application': application, 'container': base['container'],
                         'workspace': base['workspace'], 'project_id': 34110, 'network': None}}})
@@ -156,6 +162,13 @@ def initialize(application, admin_key):
 
 
 def coolify(request):
+    if CLOUD.exists():
+        try:
+            from .coolify_cloud import CloudTeam, configuration
+        except ImportError:
+            from coolify_cloud import CloudTeam, configuration
+        return CloudTeam(configuration(CLOUD), read(BASE), command,
+                         lambda tenant, network: isolate_network(tenant, None, network)).run(request)
     script = Path(__file__).with_name('coolify_team.js').read_text()
     script += '\nconfigureTeam(' + json.dumps(request) + ').then(x=>{console.log(JSON.stringify(x)); return prisma.$disconnect()}).catch(async e=>{console.error(e.message); await prisma.$disconnect(); process.exit(1)});'
     return json.loads(command(['docker', 'exec', '-i', 'coolify', 'node', '-'], input=script, timeout=120))
@@ -175,16 +188,22 @@ def allocatable_ram(state):
             raw = command(['docker', 'exec', tenant['container'], 'cat', '/sys/fs/cgroup/memory.stat'])
             # MemAvailable already credits reclaimable file cache; only add anonymous memory back.
             current_used += int(dict(line.split() for line in raw.splitlines())['anon'])
-    return max(0, available + current_used - team.GIB)
+    return max(0, available + current_used - state.get('host_ram_reserve_bytes', team.GIB))
 
 
 def preview(state, policy):
     base = read(BASE); verify_mount(base)
     limits = team.allocations(policy, state['capacity'])
+    cores = sorted(os.sched_getaffinity(0)) if hasattr(os, 'sched_getaffinity') else list(range(os.cpu_count() or 1))
+    masks = team.cpu_sets(policy, limits, cores)
+    for name, limit in limits.items():
+        limit['cpu_set'] = masks.get(name, '')
     keys = [team.public_key(user.get('public_key') or state['owner_public_key']) for user in policy['users']]
     if len(set(keys)) != len(keys):
         raise ValueError('each developer needs a distinct SSH public key, including the owner')
     affected = team.changes(state['policy'], policy)
+    affected = sorted(set(affected) | {name for name, limit in limits.items()
+        if name in state['tenants'] and limit['cpu_set'] != state['tenants'][name].get('cpu_set', '')})
     usage = quota_usage(base['mount'])
     for name, tenant in state['tenants'].items():
         current = usage[tenant['project_id']]
@@ -197,7 +216,8 @@ def preview(state, policy):
         raise ValueError('disk allocations would consume the physical safety margin')
     if policy['mode'] == 'allocated':
         if sum(v['ram_bytes'] for v in limits.values() if v['enabled']) > allocatable_ram(state):
-            raise ValueError('allocated RAM would consume the 1 GiB host floor; reduce the pool or wait')
+            floor = state.get('host_ram_reserve_bytes', team.GIB) / team.GIB
+            raise ValueError(f'allocated RAM would consume the {floor:g} GiB host floor; reduce the pool or wait')
     return {'policy': policy, 'allocations': limits, 'affected': affected,
             'revision': team.revision(state['policy']), 'candidate_revision': team.revision(policy)}
 
@@ -207,14 +227,21 @@ def rule(program, chain, args):
         command([program, '-A', chain, *args])
 
 
-def isolate_network(name, container):
-    network = 'atelier-vps-' + name
+def isolate_network(name, container, network=None):
+    network = network or 'atelier-vps-' + name
     bridge = 'avps' + team.revision(name)[:8]
     result = subprocess.run(['docker', 'network', 'inspect', network], capture_output=True, text=True)
     if result.returncode:
+        extra = []
+        if CLOUD.exists():
+            try:
+                from .coolify_cloud import private_subnet, configuration
+            except ImportError:
+                from coolify_cloud import private_subnet, configuration
+            extra = ['--subnet', private_subnet(configuration(CLOUD), command)]
         command(['docker', 'network', 'create', '--label', 'atelier-vps.tenant=' + name,
                  '--opt', 'com.docker.network.bridge.name=' + bridge,
-                 '--opt', 'com.docker.network.bridge.enable_icc=false', network])
+                 '--opt', 'com.docker.network.bridge.enable_icc=false', *extra, network])
     else:
         existing = json.loads(result.stdout)[0]
         if existing.get('Labels', {}).get('atelier-vps.tenant') != name:
@@ -226,6 +253,8 @@ def isolate_network(name, container):
         rule('iptables', 'DOCKER-USER', ['-i', bridge, '-d', subnet, '-j', 'REJECT'])
     rule('ip6tables', 'INPUT', ['-i', bridge, '-j', 'REJECT'])
     rule('ip6tables', 'FORWARD', ['-i', bridge, '-j', 'REJECT'])
+    if container is None:
+        return network
     info = inspect(container)
     if network not in info['NetworkSettings']['Networks']:
         command(['docker', 'network', 'connect', network, container])
@@ -261,10 +290,10 @@ def apply(state, policy, expected):
             target = pending['tenants'].get(name)
             limits = plan['allocations'][name]
             if target is None:
-                created = coolify({'action': 'create', 'base_application': state['base_application']})
-                target = {'application': created['id'], 'container': created['id'] + '-worker',
+                created = coolify({'action': 'create', 'base_application': state['base_application'], 'tenant': name})
+                target = {'application': created['id'], 'container': created.get('container', created['id'] + '-worker'),
                           'workspace': str(Path(base['mount']) / '.usevps-users' / name),
-                          'project_id': 34110 + len(pending['tenants']), 'network': None}
+                          'project_id': 34110 + len(pending['tenants']), 'network': created.get('network')}
                 pending['tenants'][name] = target; save(PENDING, pending)
             workspace = Path(target['workspace'])
             if workspace.is_symlink():
@@ -279,7 +308,9 @@ def apply(state, policy, expected):
                      '0', str(limits['inodes']), base['mount']])
             request = {'base_application': state['base_application'], 'application': target['application'],
                        'tenant': name, 'workspace': target['workspace'], 'mount': base['mount'],
-                       'volume_id': base['volume_id'], 'limits': limits, 'mode': policy['mode']}
+                       'volume_id': base['volume_id'], 'limits': limits, 'mode': policy['mode'],
+                       'host_ram_reserve_bytes': state.get('host_ram_reserve_bytes', team.GIB)}
+            request['cpu_set'] = limits['cpu_set']
             redeploy = (not previous or state['policy']['mode'] != policy['mode'] or
                         any(previous.get(k) != limits[k] for k in ['cpus', 'cpu_shares', 'ram_bytes', 'slots', 'enabled']))
             if limits['enabled'] and redeploy:
@@ -297,7 +328,7 @@ def apply(state, policy, expected):
             elif not limits['enabled'] and (not previous or previous.get('enabled')):
                 coolify({**request, 'action': 'stop'})
             if limits['enabled'] and policy['mode'] == 'allocated':
-                target['network'] = isolate_network(name, target['container'])
+                target['network'] = isolate_network(name, target['container'], target.get('network'))
             if name != 'owner' or user.get('public_key'):
                 identity(limits['ssh_user'], user['public_key'], existing=bool(previous))
             target.update(limits)
@@ -322,7 +353,7 @@ def main():
             raise ValueError('network repair requires an allocated developer and no pending transaction')
         tenant = state['tenants'][name]
         with deployment_lock(Path(tenant['workspace'])):
-            network = isolate_network(name, tenant['container'])
+            network = isolate_network(name, tenant['container'], tenant.get('network'))
             if network != tenant['network']:
                 raise ValueError('unexpected repaired network')
         print(json.dumps({'network_repaired': name})); return
@@ -345,7 +376,7 @@ def main():
                       'capacity': state['capacity'], 'tenants': state['tenants'],
                       'overview': overview(state),
                       'pending': read(PENDING) if PENDING.exists() else None,
-                      'host_ram_reserve_bytes': team.GIB, 'allocatable_ram_bytes': allocatable_ram(state)}
+                      'host_ram_reserve_bytes': state.get('host_ram_reserve_bytes', team.GIB), 'allocatable_ram_bytes': allocatable_ram(state)}
         elif request['action'] == 'preview':
             result = preview(state, request['policy'])
         elif request['action'] == 'apply':

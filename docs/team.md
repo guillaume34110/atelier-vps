@@ -122,8 +122,31 @@ space for projects.
 Only changed developers are drained and redeployed. Any active job refuses the
 update before mutations begin. Unaffected developers continue. Each developer
 has its own Coolify application, pinned to the approved commit of the main
-application; automatic deployment remains disabled. The adapter currently
-supports the installed **Coolify 3.12** API, not Coolify 4.
+application; automatic deployment remains disabled. The original adapter uses
+the installed **Coolify 3.12** API. Coolify Cloud is supported through its v4 API,
+with one Git-pinned owner application and a private service per additional
+developer. Each service reuses the approved owner's local immutable image with
+`pull_policy: never`; it does not install another toolchain.
+
+For Cloud, pass `--cloud-config /root/atelier-cloud.json` to `install_team.py`.
+This must be a root-owned mode-0600 JSON file with `token`, `base_application`,
+`approved_revision`, `server_uuid`, `project_uuid`, `environment_uuid` and
+`network_pool`. The credential needs Read, Write and Deploy, without Root or
+sensitive-read access. It is copied only to `/etc/atelier-vps-cloud.json` and is
+never returned by settings or stored in a developer workspace. Keep it valid for
+ongoing administration; renew or revoke it through your Coolify account.
+The pinned revision must have completed the required CI checks. Use an unused
+private IPv4 /16 for `network_pool`: the helper chooses non-overlapping /28
+bridges after checking existing Docker networks and host routes. It never
+changes Docker's global address pools or another project's networks.
+
+The helper reads CPU, RAM, slots and host memory floor from the live solo owner
+at initialization. The original 4-vCPU/5-GiB/1-GiB installation remains unchanged;
+a larger server keeps its explicitly configured envelope. Preview limits total
+allocated RAM to actual host availability beyond that floor. For example, a
+48-GiB ceiling with about 44.5 GiB currently allocatable supports two 22-GiB
+workers. Whole-core shares receive distinct CPU sets so each worker does not
+pin its tasks to the same first cores; CPU quotas and low priority remain active.
 
 Allocated workers receive private bridges. Host and private-network access is
 blocked by rules matching only their bridge, including IPv6. Public Internet

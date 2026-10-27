@@ -15,7 +15,7 @@ def install(application, admin_key):
     target = Path('/usr/local/lib/usevps')
     target.mkdir(parents=True, exist_ok=True)
     source = Path(__file__).resolve().parent
-    for name in ['team.py', 'team_settings.py', 'coolify_team.js', 'deploy_lock.py', 'gateway.py', 'invitations.py', 'install_enrollment.py']:
+    for name in ['team.py', 'team_settings.py', 'coolify_team.js', 'coolify_cloud.py', 'render_compose.py', 'deploy_lock.py', 'gateway.py', 'invitations.py', 'install_enrollment.py']:
         file = target / name
         temporary = target / ('.' + name + '.tmp')
         if temporary.is_symlink():
@@ -42,6 +42,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--application', required=True)
     parser.add_argument('--admin-key', required=True, type=Path)
+    parser.add_argument('--cloud-config', type=Path)
     args = parser.parse_args()
     if (os.geteuid() != 0 or not re.fullmatch('[a-z0-9]+', args.application) or args.admin_key.suffix != '.pub'
             or args.admin_key.is_symlink() or not args.admin_key.is_file() or args.admin_key.stat().st_size > 256):
@@ -66,6 +67,14 @@ def main():
         for tenant in state['tenants'].values():
             if tenant['workspace'] != base['workspace']:
                 stack.enter_context(deployment_lock(Path(tenant['workspace'])))
+        if args.cloud_config:
+            try:
+                from .coolify_cloud import CloudTeam, configuration
+            except ImportError:
+                from coolify_cloud import CloudTeam, configuration
+            cloud = configuration(args.cloud_config)
+            CloudTeam(cloud, base, settings.command, None).owner(args.application)
+            settings.save(settings.CLOUD, cloud)
         install(args.application, args.admin_key)
 
 

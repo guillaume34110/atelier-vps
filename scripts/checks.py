@@ -19,6 +19,7 @@ import vps
 from scripts import desktop_checks
 from ops.gateway import WORKER_EXEC, DESKTOP_TMPFS
 from ops.render_compose import bindings
+from ops.coolify_cloud import compose as cloud_compose
 
 
 def command(argv, **kwargs):
@@ -73,6 +74,11 @@ def compose_deployments():
                                   cwd=REPO, env=env))['services']['worker']
     base, cloud = service('docker-compose.yaml'), service('docker-compose.coolify.yaml')
     cloud_defaults = dict(cloud)
+    private_owner = service('docker-compose.coolify-team.yaml')
+    assert private_owner.pop('network_mode') == 'atelier-vps-owner'
+    private_owner.pop('networks', None)
+    normal_owner = {k: v for k, v in cloud_defaults.items() if k != 'networks'}
+    assert private_owner == normal_owner, 'Cloud team owner must preserve every canonical worker protection'
     mounts = cloud.pop('volumes')
     base.pop('volumes', None)
     base_pids, cloud_pids = base.pop('pids_limit'), cloud.pop('pids_limit')
@@ -206,6 +212,31 @@ def main():
                 assert not own['State']['Running']
                 command(['docker', 'rm', cpu_name])
         print('Compose CPU quota: passed', flush=True)
+        # Create only: validate local immutable images and kernel limits without starting another worker.
+        cloud_name = 'usevps-cloud-spec-' + uuid.uuid4().hex[:10]
+        original = json.loads(command(['docker', 'inspect', name]))[0]
+        cloud_spec = cloud_compose({'mount':'/volume','workspace':'/volume/member','volume_id':'ci-volume',
+            'tenant':'member','mode':'allocated','host_ram_reserve_bytes':8*1024**3,'cpu_set':'',
+            'limits':{'cpus':3,'cpu_shares':64,'ram_bytes':256*1024**2,'slots':2}},
+            original['Image'], 'service12345', 768)['services']['worker']
+        cloud_spec.update(container_name=cloud_name, network_mode='none', volumes=[
+            {'type':'bind','source':m['Source'],'target':m['Destination'],'read_only':not m['RW']} for m in original['Mounts']])
+        try:
+            command(['docker','compose','-p',cloud_name,'-f','-','create'],
+                    input=json.dumps({'services':{'worker':cloud_spec}}).encode(),cwd=REPO)
+            checked = json.loads(command(['docker','inspect',cloud_name]))[0]
+            assert not checked['State']['Running'] and checked['State']['Pid']==0
+            assert checked['Image']==original['Image']
+            assert checked['HostConfig']['Memory']==checked['HostConfig']['MemorySwap']==256*1024**2
+            assert checked['HostConfig']['CpuQuota']==300000 and checked['HostConfig']['PidsLimit']==768
+            assert checked['HostConfig']['ReadonlyRootfs'] and checked['Config']['User']=='10001:10001'
+        finally:
+            result = subprocess.run(['docker','inspect',cloud_name],capture_output=True)
+            if result.returncode==0:
+                own=json.loads(result.stdout)[0]
+                assert own['Config']['Labels']['com.docker.compose.project']==cloud_name and not own['State']['Running']
+                command(['docker','rm',cloud_name])
+        print('Cloud member immutable image and real Docker limits: passed', flush=True)
         command(["docker", "exec", name, "python3", "-c", "import pip, venv; import socket; assert socket.getaddrinfo('registry.npmjs.org',443)"])
         command(["docker", "exec", name, "node", "--version"])
         (evidence / "toolchain.json").write_bytes(command(["docker", "exec", name, "cat", "/opt/usevps-dev.json"]))

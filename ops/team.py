@@ -97,6 +97,23 @@ def allocations(policy, capacity):
     return result
 
 
+def cpu_sets(policy, limits, cores):
+    """Different workers must not all pin their jobs to the first host cores."""
+    if policy['mode'] != 'allocated':
+        return {}
+    result, offset = {}, 0
+    for user in policy['users']:
+        limit = limits[user['id']]
+        if not limit['enabled']:
+            continue
+        count = max(1, math.ceil(limit['cpus']))
+        if count > len(cores):
+            raise ValueError('CPU allocation exceeds the available physical cores')
+        result[user['id']] = ','.join(str(cores[(offset + i) % len(cores)]) for i in range(count))
+        offset += count
+    return result
+
+
 def changes(previous, candidate):
     old = {user['id']: user for user in previous['users']}
     new = {user['id']: user for user in candidate['users']}
