@@ -8,7 +8,7 @@ mount -t devtmpfs devtmpfs /dev
 mkdir -p /work /tools /modules /mod /job /sys/fs/cgroup
 
 if modprobe virtiofs && mount -t virtiofs atelier /work &&
-    mount -t virtiofs tools /tools && mount -t virtiofs modules /modules &&
+    mount -t virtiofs -o ro,nosuid,nodev tools /tools && mount -t virtiofs -o ro,nosuid,nodev modules /modules &&
     modprobe loop && modprobe squashfs &&
     mount -t squashfs -o loop /modules/modloop-virt /mod &&
     modprobe virtio_blk && mount -o bind /mod/modules /lib/modules &&

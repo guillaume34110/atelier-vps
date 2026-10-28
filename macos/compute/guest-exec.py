@@ -1,4 +1,5 @@
 """Run one request inside the isolated guest and export only declared files."""
+import ctypes
 import hashlib
 import json
 import os
@@ -35,6 +36,8 @@ def drop_privileges():
     os.setgroups([])
     os.setgid(10001)
     os.setuid(10001)
+    if ctypes.CDLL(None, use_errno=True).prctl(38, 1, 0, 0, 0):
+        raise OSError(ctypes.get_errno(), 'cannot block new privileges')
 
 
 def kill_descendants():

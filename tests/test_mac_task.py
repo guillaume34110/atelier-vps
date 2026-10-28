@@ -1,7 +1,9 @@
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -15,6 +17,21 @@ spec.loader.exec_module(task)
 
 
 class TaskTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform.startswith('linux'), 'guest privilege gate requires Linux')
+    def test_guest_denies_new_privileges_in_a_real_child(self):
+        code = '''import importlib.util,os,tempfile
+from pathlib import Path
+spec=importlib.util.spec_from_file_location('guest',os.environ['GUEST_SCRIPT'])
+guest=importlib.util.module_from_spec(spec);spec.loader.exec_module(guest)
+with tempfile.TemporaryDirectory() as directory:
+ guest.CGROUP=Path(directory);(guest.CGROUP/'cgroup.procs').touch()
+ guest.os.setgroups=lambda _:None;guest.os.setgid=lambda _:None;guest.os.setuid=lambda _:None
+ guest.drop_privileges()
+ assert 'NoNewPrivs:\\t1' in Path('/proc/self/status').read_text()
+'''
+        environment = {**os.environ, 'GUEST_SCRIPT': str(directory / 'guest-exec.py')}
+        subprocess.run([sys.executable, '-c', code], env=environment, check=True, timeout=10)
+
     def archive(self, root, member):
         path = root / 'input.tar'
         with tarfile.open(path, mode='w') as tar:
