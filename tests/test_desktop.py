@@ -112,6 +112,20 @@ class DesktopTests(unittest.TestCase):
                 self.assertEqual(saved['ram_bytes'], None if source == 'measured' and override is None else wanted)
                 self.assertEqual(len(saved['dependency_digest']), 64)
 
+    def test_installed_runtime_still_reserves_space_for_profile_growth(self):
+        runtime = self.root / 'runtime'
+        runtime.mkdir()
+        (runtime / 'installed.json').write_text('{}')
+        with patch.object(desktop, 'active', side_effect=[False, True, True]), \
+                patch.object(worker, 'status', return_value={'maintenance': False, 'admit': True, 'pool': {}}), \
+                patch.object(resources, 'ram_request', return_value=(worker.GIB, 'unprofiled')), \
+                patch.object(resources, 'admission', return_value={'allowed': True}) as admission, \
+                patch.object(desktop.desktop_runtime, 'location', return_value=(runtime, {})), \
+                patch.object(desktop.subprocess, 'Popen'):
+            value = desktop.start()
+            self.assertEqual(admission.call_args.args[3], 6 * worker.GIB)
+            self.assertEqual(value['disk_bytes'], 6 * worker.GIB)
+
     def test_api_billing_is_removed_from_provider_environment(self):
         value = accounts.account_environment({'OPENAI_API_KEY': 'x', 'ANTHROPIC_API_KEY': 'y',
             'ANTHROPIC_AUTH_TOKEN': 'z', 'CLAUDE_CODE_USE_BEDROCK': '1', 'KEEP': 'value'})

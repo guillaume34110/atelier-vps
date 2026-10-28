@@ -100,9 +100,7 @@ def start(provider='chatgpt', ram_bytes=None):
                    'agent': 'Atelier · ' + ('ChatGPT' if provider == 'chatgpt' else 'Claude'), 'project': 'atelier-desktop',
                    'timeout': 3600, 'cpus': 1, 'disk_bytes': 6 * worker.GIB, 'ram_bytes': None,
                    'dependency_digest': hashlib.sha256(desktop_runtime.MANIFEST.read_bytes()).hexdigest()}
-        runtime, _ = desktop_runtime.location(ROOT)
-        if (runtime / 'installed.json').is_file():
-            request['disk_bytes'] = 2 * worker.GIB
+        # Installed applications can still create a large persistent profile.
         ram, source = resources.ram_request(ROOT, request)
         if source == 'unprofiled':
             ram = int(2.5 * worker.GIB)
