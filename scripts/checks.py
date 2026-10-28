@@ -16,6 +16,7 @@ import uuid
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 import vps
+import projects
 from scripts import desktop_checks
 from ops.gateway import WORKER_EXEC, DESKTOP_TMPFS
 from ops.render_compose import bindings
@@ -39,15 +40,16 @@ def execute(container, action, body=b"", success=True):
     return r.stdout
 
 
-def payload(argv, files=None, **options):
+def payload(argv, files=None, *, include_default=True, **options):
     request = {"argv": argv, "disk_bytes": 16 * 1024 ** 2, "timeout": 20, **options}
     out = io.BytesIO()
     out.write(json.dumps(request).encode() + b"\n")
     with tarfile.open(fileobj=out, mode="w") as tar:
-        data = b"21\n"
-        info = tarfile.TarInfo("input.txt")
-        info.size = len(data)
-        tar.addfile(info, io.BytesIO(data))
+        if include_default:
+            data = b"21\n"
+            info = tarfile.TarInfo("input.txt")
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
         for name, text in (files or {}).items():
             content = text.encode()
             entry = tarfile.TarInfo(name)
@@ -273,6 +275,38 @@ def main():
         (evidence / 'transfer-proof.json').write_text(json.dumps(transfers))
         print("Running service + input/process/result SHA256 round trip: passed", flush=True)
         execute(name, "release", json.dumps({"id": task["id"]}).encode() + b"\n")
+        with tempfile.TemporaryDirectory(dir=root) as fixture:
+            source = Path(fixture); (source / 'input.txt').write_text('21\n')
+            (source / 'src').mkdir(); (source / 'src/app.py').write_text('original\n')
+            digest, _ = projects.fingerprint(projects.tree_files(source))
+            ref = {'id':'demo', 'revision':digest}
+            prepared = json.loads(execute(name, 'run', payload(['true'], files={'src/app.py':'original\n'},
+                project_create=ref, disk_bytes=32 * 1024**2)))
+            assert prepared['status'] == 'passed' and prepared['managed_project']['revision'] == digest, prepared
+            execute(name, 'release', json.dumps({'id':prepared['id']}).encode() + b'\n')
+            commands = ["from pathlib import Path; import time; Path('src/app.py').write_text('changed'); time.sleep(2)",
+                        "from pathlib import Path; import time; assert Path('src/app.py').read_text() == 'original\\n'; time.sleep(2)"]
+            jobs = [subprocess.Popen(['docker', 'exec', '-i', '--user', '10001:10001', name, *WORKER_EXEC, 'run'],
+                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE) for _ in commands]
+            try:
+                for process, code in zip(jobs, commands):
+                    process.stdin.write(payload(['python3','-c',code], include_default=False,
+                                                 project_from=ref, disk_bytes=32 * 1024**2))
+                    process.stdin.close(); process.stdin = None
+                results = []
+                for process in jobs:
+                    out, err = process.communicate(timeout=60)
+                    assert process.returncode == 0, err[-1000:]
+                    results.append(json.loads(out))
+                assert all(result['status'] == 'passed' for result in results), results
+                assert max(result['started'] for result in results) < min(result['ended'] for result in results), results
+                for result in results:
+                    execute(name, 'release', json.dumps({'id':result['id']}).encode() + b'\n')
+            finally:
+                for process in jobs:
+                    if process.poll() is None:
+                        process.terminate(); process.wait(timeout=10)
+        print('Persistent project version survives release and isolates concurrent jobs: passed', flush=True)
         slow = subprocess.Popen(['docker', 'exec', '-i', '--user', '10001:10001', name, *WORKER_EXEC, 'run'],
                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         body = payload(['true'], files={'large.txt': 'x' * 128 * 1024}, agent='CI · sources en cours', ram_bytes=128 * 1024**2)

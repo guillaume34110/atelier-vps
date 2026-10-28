@@ -38,6 +38,11 @@ lecture seule dans l'image, à `/app/AGENTS.md`.
   identifiés. Ne jamais y stocker sources, secrets ou résultats irremplaçables.
   Les outils de base, caches anciens non suivis et données des calculs restent
   préservés. La marge RAM automatique s'applique une fois, sans multiplicateur ×2.
+- Les sources de projets gérées sont conservées par version dans l'espace privé
+  du développeur. Valider l'empreinte des sources filtrées, ne jamais écraser ni
+  supprimer automatiquement une version, et créer une copie vérifiée par calcul
+  pour isoler les tâches parallèles. Leur stockage et chaque copie comptent dans
+  le quota et les réservations ; un changement local impose une nouvelle version.
 - Pour le navigateur, utiliser `CHROMIUM_PATH`, un profil temporaire et les
   arguments des exemples fournis. Les binaires macOS et les outils Android Linux
   x86 ne fonctionnent pas sur ce VPS ARM64 : conserver émulateurs/NDK concernés

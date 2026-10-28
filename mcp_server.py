@@ -121,6 +121,33 @@ def vps_run(source: str, argv: list[str], agent: str, disk_gib: float,
 
 
 @server.tool(structured_output=True)
+def vps_project_prepare(source: str, project_id: str, disk_gib: float, cpus: int = 1,
+                        ram_gib: float | None = None, timeout: int = 1800,
+                        server: str | None = None, arch: str = 'any') -> dict[str, Any]:
+    """Store one immutable, versioned project source on a developer's VPS.
+
+    Sources use the normal secret exclusions and full resource reservation.
+    Existing versions and results are never overwritten or removed. A changed
+    source during transfer fails without accepting a partial version. Preserve
+    the preparation receipt before releasing its ordinary job.
+    """
+    return vps.prepare_project(source, project_id, disk_gib, cpus, ram_gib, timeout, server, arch)[1]
+
+
+@server.tool(structured_output=True)
+def vps_project_run(project_ref: str, argv: list[str], agent: str, disk_gib: float,
+                    cpus: int = 1, ram_gib: float | None = None, timeout: int = 1800,
+                    source: str | None = None, server: str | None = None) -> dict[str, Any]:
+    """Run on the VPS from a stored source revision without uploading it again.
+
+    A fresh, verified copy gives each task isolation. Pass the local source when
+    available to reject a stale revision; prepare a new version after edits.
+    Results stay in this task until fetched, verified and explicitly released.
+    """
+    return vps.run_project(project_ref, argv, agent, disk_gib, cpus, ram_gib, timeout, source, server)[1]
+
+
+@server.tool(structured_output=True)
 def vps_wait(job_id: str, timeout: int = 3600, server: str | None = None) -> dict[str, Any]:
     """Wait on the VPS for an existing job's final state, without repeated model polling.
 

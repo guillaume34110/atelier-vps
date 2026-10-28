@@ -22,6 +22,15 @@ job and investigate rather than relaunching it. A completion wake-up requires an
 active supported MCP call; a closed host or an unrelated external service cannot
 be awakened or monitored by Atelier VPS automatically.
 
+For repeated compatible work, prepare a managed project with
+`vps_project_prepare`, retain its `connection:project:revision` reference and
+use `vps_project_run` for later jobs. Pass the local `source` path when available
+so edits reject stale revisions; prepare a new version after changes. Each job
+gets a separate verified copy and complete CPU/RAM/disk reservation. Project
+sources remain private, count against quota and are never automatically removed.
+Fetch and preserve the ordinary job's results before release. These versions do
+not synchronize edits made inside a job back to the stored project automatically.
+
 Call `vps_run` with the actual source directory, an argument array, a short public
 agent label and explicit CPU, disk and timeout reservations. Omit `ram_gib` in MCP
 or use CLI `--ram-gib auto` for previously profiled work: the worker reserves its

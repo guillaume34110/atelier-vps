@@ -17,6 +17,7 @@ import tempfile
 from worker import FETCH_LIMIT, GIB, INPUT_LIMIT, safe_path
 from telemetry import public_label
 import client_config
+import projects
 
 SKIP = {".git", "node_modules", ".venv", "venv", ".cache", "__pycache__",
         "output", "dist", "build", ".next", "coverage", "CLAUDE.md", ".ssh",
@@ -97,10 +98,11 @@ def transport(host, operation, request=None, payload=None, output=None, source=N
             if payload:
                 with payload.open("rb") as src:
                     shutil.copyfileobj(src, proc.stdin, 65536)
-            if source is not None:
+            if source is not None or operation == 'run':
                 with tarfile.open(fileobj=proc.stdin, mode='w|') as archive:
-                    for file, name in inputs(source):
-                        archive.add(file, arcname=name, recursive=False)
+                    if source is not None:
+                        for file, name in inputs(source):
+                            archive.add(file, arcname=name, recursive=False)
             proc.stdin.close()
         except BrokenPipeError:
             pass  # Read the admission error even when the source stream was refused.
@@ -234,6 +236,9 @@ def select_server(request, server=None, arch='any'):
         if not state.get('admit') or state.get('maintenance'):
             diagnostics.append({'server':row['id'],'reason':'not_admitting'})
             continue
+        if (request.get('project_create') or request.get('project_from')) and not state.get('capabilities', {}).get('project_sources'):
+            diagnostics.append({'server':row['id'],'reason':'project_sources_unavailable'})
+            continue
         needed = dict(request)
         if needed.get('ram_bytes') is None and not state.get('capabilities',{}).get('ram_profiles'):
             needed['ram_bytes'] = GIB
@@ -303,6 +308,60 @@ def job_target(reference, server=None):
     if not re.fullmatch('[a-f0-9]{32}', ident):
         raise ValueError('invalid job ID')
     return profile, ident
+
+
+def project_target(reference, server=None):
+    parts = reference.split(':') if isinstance(reference, str) else []
+    if len(parts) != 3:
+        raise ValueError('use the qualified connection:project:revision reference')
+    profile = client_config.connection(parts[0])
+    if server and client_config.connection(server)['id'] != profile['id']:
+        raise ValueError('project belongs to another server')
+    return profile, projects.identifier(parts[1]), projects.revision(parts[2])
+
+
+def prepare_project(source, name, disk_gib, cpus=1, ram_gib=None, timeout=1800, server=None, arch='any'):
+    directory = Path(source).expanduser().resolve()
+    if not directory.is_dir():
+        raise ValueError('an existing project directory is required')
+    name = projects.identifier(name)
+    digest, _ = projects.fingerprint(inputs(directory), root=directory)
+    if not all(math.isfinite(x) and x > 0 for x in (disk_gib, ram_gib) if x is not None):
+        raise ValueError('finite, positive disk and RAM reservations are required')
+    request = {'argv':['true'], 'agent':public_label('Projet ' + name, 'Projet'), 'project':name,
+               'project_create':{'id':name, 'revision':digest}, 'timeout':timeout, 'cpus':cpus,
+               'disk_bytes':math.ceil(disk_gib * GIB),
+               'ram_bytes':None if ram_gib is None else math.ceil(ram_gib * GIB),
+               'dependency_digest':dependency_digest(directory)}
+    rc, result = run_on_server(request, directory, server, arch)
+    saved = result.get('managed_project')
+    if rc == 0 and result.get('status') == 'passed':
+        if not isinstance(saved, dict) or saved.get('id') != name or saved.get('revision') != digest:
+            raise RuntimeError('project preparation returned an invalid receipt')
+        result['project_ref'] = result['connection'] + ':' + name + ':' + digest
+    return rc, result
+
+
+def run_project(reference, argv, agent, disk_gib, cpus=1, ram_gib=None, timeout=1800, source=None, server=None):
+    profile, name, digest = project_target(reference, server)
+    if not argv or not all(isinstance(item, str) and '\x00' not in item for item in argv):
+        raise ValueError('a nonempty argument array is required')
+    if not all(math.isfinite(x) and x > 0 for x in (disk_gib, ram_gib) if x is not None):
+        raise ValueError('finite, positive disk and RAM reservations are required')
+    dependency = digest
+    if source is not None:
+        directory = Path(source).expanduser().resolve()
+        if not directory.is_dir() or projects.fingerprint(inputs(directory), root=directory)[0] != digest:
+            raise ValueError('local project changed; prepare a new project revision')
+        dependency = dependency_digest(directory)
+    request = {'argv':argv, 'agent':public_label(agent, 'Agent'), 'project':name,
+               'project_from':{'id':name, 'revision':digest}, 'timeout':timeout, 'cpus':cpus,
+               'disk_bytes':math.ceil(disk_gib * GIB),
+               'ram_bytes':None if ram_gib is None else math.ceil(ram_gib * GIB),
+               'dependency_digest':dependency}
+    rc, result = run_on_server(request, None, profile['id'], 'any')
+    result['project_ref'] = reference
+    return rc, result
 
 
 def wait_for_job(reference, timeout=3600, server=None):
@@ -432,6 +491,23 @@ def main():
     run.add_argument("--ram-gib", default='auto', help="auto learns measured peaks with headroom; or explicit GiB")
     run.add_argument('--arch', choices=['aarch64','x86_64','any'], default='any')
     run.add_argument("argv", nargs=argparse.REMAINDER)
+    prepare = commands.add_parser('project-prepare', help='store a versioned project source on the VPS')
+    prepare.add_argument('--source', type=Path, required=True)
+    prepare.add_argument('--id', required=True)
+    prepare.add_argument('--disk-gib', type=float, required=True)
+    prepare.add_argument('--cpus', type=int, default=1)
+    prepare.add_argument('--ram-gib', default='auto')
+    prepare.add_argument('--timeout', type=int, default=1800)
+    prepare.add_argument('--arch', choices=['aarch64','x86_64','any'], default='any')
+    project_run = commands.add_parser('project-run', help='run a stored project revision')
+    project_run.add_argument('project_ref')
+    project_run.add_argument('--source', type=Path, help='reject a revision that differs from these local sources')
+    project_run.add_argument('--agent', required=True)
+    project_run.add_argument('--disk-gib', type=float, required=True)
+    project_run.add_argument('--cpus', type=int, default=1)
+    project_run.add_argument('--ram-gib', default='auto')
+    project_run.add_argument('--timeout', type=int, default=1800)
+    project_run.add_argument('argv', nargs=argparse.REMAINDER)
     fetch = commands.add_parser("fetch")
     fetch.add_argument("id")
     fetch.add_argument("paths", nargs="+", help="e.g. work/result.txt stdout.log receipt.json")
@@ -510,6 +586,19 @@ def main():
         result = wait_for_job(args.id, args.timeout, args.server)
         print(json.dumps(result))
         return 0 if result['status'] == 'passed' else 1
+    if args.action in {'project-prepare', 'project-run'}:
+        if args.host:
+            raise ValueError('managed projects require a saved server connection')
+        ram = None if args.ram_gib == 'auto' else float(args.ram_gib)
+        if args.action == 'project-prepare':
+            rc, result = prepare_project(args.source, args.id, args.disk_gib, args.cpus, ram,
+                                         args.timeout, args.server, args.arch)
+        else:
+            argv = args.argv[1:] if args.argv[:1] == ['--'] else args.argv
+            rc, result = run_project(args.project_ref, argv, args.agent, args.disk_gib,
+                                     args.cpus, ram, args.timeout, args.source, args.server)
+        print(json.dumps(result))
+        return rc
     if args.action == 'run':
         argv = args.argv[1:] if args.argv[:1] == ['--'] else args.argv
         if not argv or not args.source.is_dir():

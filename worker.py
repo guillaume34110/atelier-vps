@@ -12,6 +12,7 @@ import re
 import resource
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tarfile
@@ -22,6 +23,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from telemetry import process_token, public_label, record_activity, snapshot, Transfer
 import dependency_cache
 import diagnostics
+import projects
 import resources
 from quota_protection import protect_quota
 
@@ -143,7 +145,7 @@ def status():
     state.update(pool=pool, busy=bool(pool['active_count']) or maintenance, maintenance=maintenance,
                  admit=not maintenance and resources.fits(pool, 1, 64 * MIB, MIB),
                  capabilities={'ram_profiles': True, 'quota_attributes_protected': True, 'failure_details': True,
-                               'planning': True, 'desktop_sessions': True, 'job_wait': True},
+                               'planning': True, 'desktop_sessions': True, 'job_wait': True, 'project_sources': True},
                  scope={'id': os.environ.get('USEVPS_TENANT', 'owner'),
                         'mode': os.environ.get('USEVPS_MODE', 'opportunistic')})
     return state
@@ -176,8 +178,9 @@ def public_status():
     return state
 
 
-def extract(stream, target):
+def extract(stream, target, check=None):
     size, count = 0, 0
+    since_check = 0
     with tarfile.open(fileobj=stream, mode="r|*") as archive:
         for member in archive:
             rel = safe_path(member.name)
@@ -193,10 +196,16 @@ def extract(stream, target):
                     raise ValueError("input exceeds 64 MiB")
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 with archive.extractfile(member) as src, dest.open("xb") as out:
-                    shutil.copyfileobj(src, out, 64 * 1024)
+                    while chunk := src.read(64 * 1024):
+                        out.write(chunk)
+                        since_check += len(chunk)
+                        if check and since_check >= 4 * MIB:
+                            check(); since_check = 0
                 dest.chmod(0o755 if member.mode & 0o111 else 0o644)
             else:
                 raise ValueError("links and special files are forbidden")
+    if check:
+        check()
 
 
 def read_request():
@@ -318,6 +327,33 @@ def plan(request):
 
 
 def run_job(request, stream, *, ident=None, persistent=None, profile_ready=None):
+    create = request.get('project_create')
+    use = request.get('project_from')
+    if create is not None and use is not None:
+        raise ValueError('choose project preparation or execution')
+    for value in (create, use):
+        if value is not None:
+            if not isinstance(value, dict) or set(value) != {'id', 'revision'}:
+                raise ValueError('invalid project reference')
+            projects.identifier(value['id']); projects.revision(value['revision'])
+    if use is not None and persistent is not None:
+        raise ValueError('project execution cannot use another persistent profile')
+    if create is not None:
+        if persistent is not None or request.get('argv') != ['true']:
+            raise ValueError('project preparation cannot run another command')
+        directory = projects.directory(ROOT, create['id'], create=True)
+        lock_path = directory / '.prepare.lock'
+        fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, 'a') as lock:
+            info = os.fstat(lock.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                raise ValueError('invalid project preparation lock')
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return _run_job(request, stream, ident=ident, persistent=directory, profile_ready=profile_ready)
+    return _run_job(request, stream, ident=ident, persistent=persistent, profile_ready=profile_ready)
+
+
+def _run_job(request, stream, *, ident=None, persistent=None, profile_ready=None):
     argv, timeout, peak = validate_job_request(request)
     agent = public_label(request.get("agent"), "Agent non identifié")
     project = public_label(request.get("project"), "Projet non identifié")
@@ -342,9 +378,25 @@ def run_job(request, stream, *, ident=None, persistent=None, profile_ready=None)
                   "agent": agent, "project": project, "runner": process_token(os.getpid()),
                   "reservation": {k: lease.value[k] for k in ('cpus', 'ram_bytes', 'disk_bytes', 'ram_source')}}
         receipt(path, result)
+        def check_input():
+            state = capacity()
+            growth = usage(path) + (max(0, usage(persistent) - persistent_start) if persistent else 0)
+            lease.update(process_memory({os.getpid()}), growth, {os.getpid()}, usage(cache))
+            if state['free_bytes'] < state['reserve_bytes'] or state['used_bytes'] > state['budget_bytes'] or lease.value['disk_used'] > peak:
+                raise RuntimeError('disk limit')
+            if lease.value['ram_peak'] > lease.value['ram_bytes']:
+                raise RuntimeError('task memory limit')
+            if state['host_available_ram'] < reserve_ram:
+                raise RuntimeError('host memory pressure')
         try:
+            managed = request.get('project_create') or request.get('project_from')
+            if managed:
+                check_input()
             with Transfer(ROOT, stream, 'upload', ident, agent, project) as transfer:
-                extract(transfer, work)
+                extract(transfer, work, check_input if managed else None)
+            if request.get('project_from'):
+                value = request['project_from']
+                projects.materialize(ROOT, value['id'], value['revision'], work, peak, check_input)
             for directory in (work / ".tmp", work / ".home", ROOT / "cache"):
                 directory.mkdir(exist_ok=True)
             env = os.environ.copy()
@@ -430,6 +482,14 @@ def run_job(request, stream, *, ident=None, persistent=None, profile_ready=None)
                                      "ram_bytes": lease.value['ram_used'], "cpus": lease.value['cpus'],
                                      "ram_peak_bytes": lease.value['ram_peak'], "ram_sample_seconds": 0.25,
                                      "total_used_bytes": final["used_bytes"], "physical_free_bytes": final["free_bytes"]})
+            if request.get('project_create') and result['status'] == 'passed':
+                value = request['project_create']
+                result['managed_project'] = projects.store(ROOT, value['id'], value['revision'], work, ident, check_input)
+                final, resource_reason = measure()
+                if resource_reason:
+                    result.update(status='failed', reason=resource_reason, returncode=1)
+                result['resources'].update(growth_bytes=lease.value['disk_used'],
+                                           total_used_bytes=final['used_bytes'], physical_free_bytes=final['free_bytes'])
         except Exception as exc:
             stop_children()
             result.update(status="failed", reason=str(exc), returncode=1, ended=time.time())

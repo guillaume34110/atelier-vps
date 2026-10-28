@@ -1,6 +1,7 @@
 import copy
 import json
 from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -42,6 +43,11 @@ class Fleet(unittest.TestCase):
             result={'ok':True,'scope':value['scope'],'admission':{'allowed':allowed},
                     'requested':{'cpus':request['cpus'],'ram_bytes':ram,'disk_bytes':request['disk_bytes'],'ram_source':'unprofiled'}}
         elif operation=='run':
+            if request.get('project_create'):
+                return 0,json.dumps({'id':'d'*32,'status':'passed','managed_project':request['project_create']}).encode()
+            if request.get('project_from'):
+                self.assertIsNone(kwargs.get('source'))
+                return 0,json.dumps({'id':'e'*32,'status':'passed'}).encode()
             return 1,json.dumps({'id':'c'*32,'status':'failed','returncode':7}).encode()
         elif operation=='fetch' and 'wait_timeout' in request:
             result={'kind':'job_wait','id':request['id'],'status':'passed','timed_out':False,'argv':['secret']}
@@ -92,6 +98,25 @@ class Fleet(unittest.TestCase):
             vps.wait_for_job('paris:' + 'c' * 32, 1)
         with self.assertRaises(ValueError):
             vps.wait_for_job('lyon:' + 'c' * 32, -1)
+
+    def test_managed_project_is_pinned_to_its_server_and_rejects_stale_sources(self):
+        self.states['lyon-worker']['capabilities']['project_sources'] = True
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); (root / 'main.py').write_text('print(1)\n')
+            rc, prepared = vps.prepare_project(root, 'demo', 1, server='lyon')
+            self.assertEqual(rc, 0)
+            reference = prepared['project_ref']
+            self.assertTrue(reference.startswith('lyon:demo:'))
+            rc, result = vps.run_project(reference, ['true'], 'Tests', 1, source=root)
+            self.assertEqual((rc, result['status'], result['project_ref']), (0, 'passed', reference))
+            request = [call[2] for call in self.calls if call[1] == 'run'][-1]
+            self.assertEqual(request['dependency_digest'], vps.dependency_digest(root))
+            (root / 'main.py').write_text('changed\n')
+            with self.assertRaises(ValueError):
+                vps.run_project(reference, ['true'], 'Tests', 1, source=root)
+            with self.assertRaises(ValueError):
+                vps.run_project(reference, ['true'], 'Tests', 1, server='paris')
+        self.assertFalse(any(host == 'paris-worker' and action == 'run' for host, action, _ in self.calls))
 
     def test_architecture_and_unknown_server_identity_are_not_guessed(self):
         self.states['lyon-worker']['telemetry']['arch']='x86_64'
