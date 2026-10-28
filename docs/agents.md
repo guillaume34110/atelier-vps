@@ -18,10 +18,11 @@ Local Cowork requires KVM, which Hetzner Cloud does not provide.
 [Hetzner virtualization](https://docs.hetzner.com/cloud/servers/faq/).
 
 The desktop shares the existing worker pool. It reserves one CPU, uses measured
-RAM with the usual single margin, and keeps the host reserve. A first launch
-requests 2.5 GiB RAM and a 6 GiB installation peak. An installed runtime requests
-a 2 GiB working peak. Admission can refuse either request; it never reduces the
-claim. The existing 3,600-second limit also applies to a desktop session.
+RAM with the usual single margin, and keeps the host reserve. An unprofiled launch
+requests 2.5 GiB RAM. Every session reserves a 6 GiB disk peak because its
+persistent profile can grow even when the application is already installed. This
+is a reservation, not preallocated storage; admission never reduces the claim.
+The existing 3,600-second limit also applies to a desktop session.
 An agent can supply a known `ram_gib` peak for a different workload; it must not
 shrink a refused claim or apply a second margin. Active claims are preserved.
 Finish its tasks before that deadline or before choosing **Close desktop**.
