@@ -136,3 +136,12 @@ lecture seule dans l'image, à `/app/AGENTS.md`.
   threads pour les installations existantes ; le manifeste Coolify Cloud utilise
   768 après calibration des démarrages x86_64, sans augmenter CPU, RAM ou disque.
   La recette vérifie l'absence de refus et une marge de 32 threads au pic mesuré.
+- Un agent déjà sur un VPS peut utiliser le Mac de son propre espace si
+  `python3 /app/mac_client.py --status` indique une disponibilité et si le
+  travail convient à sa VM Linux ARM64 Alpine hors réseau. Déclarer CPU, RAM,
+  pic disque, durée et résultats ; compter l'archive et les résultats dans la
+  réservation du calcul VPS appelant. Le Mac vérifie aussi ses propres marges.
+  Les agents installés sur le Mac continuent de privilégier les VPS pour les
+  travaux Linux compatibles ; le Mac ne démarre une VM que sur demande distante.
+  Une connexion perdue après admission ne justifie jamais une relance : relever
+  l'identifiant du calcul et récupérer son résultat avec `--recover`.

@@ -1,6 +1,6 @@
 FROM scratch
 COPY ops/rootfs/ /
-COPY worker.py telemetry.py resources.py dependency_cache.py diagnostics.py quota_protection.py projects.py AGENTS.md /app/
+COPY worker.py telemetry.py resources.py dependency_cache.py diagnostics.py quota_protection.py projects.py mac_relay.py mac_protocol.py mac_client.py vps.py client_config.py AGENTS.md /app/
 COPY accounts.py desktop_runtime.py desktop_service.py /app/
 COPY ops/agent-toolchain.json /app/agent-toolchain.json
 COPY scripts/desktop_probe.py /app/desktop_probe.py

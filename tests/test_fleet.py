@@ -66,6 +66,17 @@ class Fleet(unittest.TestCase):
         self.assertFalse(result['connections'][1]['connected'])
         self.assertNotIn('private diagnostic',json.dumps(result))
 
+    def test_shared_mac_is_counted_once_without_inventing_pool_capacity(self):
+        self.states['paris-worker']['mac']={'node_id':'c'*32,'available':True}
+        self.states['lyon-worker']['mac']={'node_id':'c'*32,'available':False}
+        result=vps.fleet_status()
+        self.assertEqual((result['global']['macs_connected'],result['global']['macs_available']),(1,1))
+        self.assertEqual(result['global']['cpu_total'],8)
+        self.assertEqual(result['connections'][0]['mac']['node_id'],'c'*32)
+        self.states['lyon-worker']['mac']['node_id']='invalid'
+        result=vps.fleet_status()
+        self.assertFalse(result['connections'][1]['connected'])
+
     def test_complete_claim_is_placed_on_one_fresh_compatible_server(self):
         selected=vps.select_server(self.request)
         self.assertEqual(selected['id'],'lyon')

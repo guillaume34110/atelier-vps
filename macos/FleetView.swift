@@ -59,6 +59,11 @@ struct FleetServerList: View {
                     .monospacedDigit().foregroundColor(Paint.green)
                 Text(LF("%d / %d tasks · %@ %@ storage available", document.agents.count, pool.max_jobs, gib(document.diskReservable), L("GiB")))
                     .monospacedDigit().foregroundColor(Paint.muted)
+                if let mac = document.mac {
+                    Text(L(mac.available ? "Mac available" : "Mac busy"))
+                        .foregroundColor(mac.available ? Paint.green : Paint.muted)
+                        .accessibilityIdentifier("mac-worker-status")
+                }
             } else {
                 Text(L(!sample.connection.active ? "Disabled" : !sample.fresh ? "Offline" : sample.identity == nil ? "Update this server to include it in Global" : "Already counted in Global"))
                     .foregroundColor(Paint.muted)

@@ -141,6 +141,8 @@
 "Global" = "Global";
 "Add a server" = "Ajouter un serveur";
 "Servers" = "Serveurs";
+"Mac available" = "Mac disponible";
+"Mac busy" = "Mac occupé";
 "Manage" = "Gérer";
 "Global adds connected servers. Each task runs on one server." = "Global additionne les serveurs connectés. Chaque calcul reste sur un seul serveur.";
 "CPU %@ · RAM %@ %@ · %d agents" = "CPU %@ · RAM %@ %@ · agents : %d";

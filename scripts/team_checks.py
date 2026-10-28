@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import select
 import shutil
 import subprocess
 import sys
@@ -9,6 +10,20 @@ import time
 import uuid
 
 import vps
+
+
+def read_exact(stream, size):
+    result = bytearray()
+    deadline = time.monotonic() + 15
+    while len(result) < size:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 or not select.select([stream], [], [], remaining)[0]:
+            raise TimeoutError('private relay did not respond')
+        part = os.read(stream.fileno(), size - len(result))
+        if not part:
+            raise EOFError('private relay closed')
+        result.extend(part)
+    return bytes(result)
 
 
 def verify_team_isolation(root, dev, remote_host, volume, command, execute, payload, image):
@@ -62,6 +77,39 @@ probe=m/'probe';probe.mkdir();probe.chmod(0)
         assert own['scope']['id'] == 'alice' and 'host_total_ram' not in own['telemetry'], own
         assert own['budget_bytes'] <= 16 * 1024**2, own
         assert own['telemetry']['worker_cpu_limit'] == 0.5, own
+        from ops.gateway import WORKER_EXEC
+        relay = subprocess.Popen(['docker', 'exec', '-i', '--user', '10001:10001', names[0], *WORKER_EXEC, 'mac'],
+                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        peer = None
+        try:
+            relay.stdin.write(json.dumps({'action': 'listen', 'node_id': 'a' * 32}).encode() + b'\n')
+            relay.stdin.flush()
+            assert read_exact(relay.stdout, 1) == b'R'
+            hello_length = int.from_bytes(read_exact(relay.stdout, 4), 'big')
+            assert 1 <= hello_length <= 1024
+            assert json.loads(read_exact(relay.stdout, hello_length)) == {'scope': 'alice', 'server_id': None}
+            assert json.loads(execute(names[0], 'status'))['mac']['available'] is True
+            assert json.loads(execute(names[1], 'status'))['mac'] is None
+            check_socket = "from pathlib import Path; assert not Path('/workspace/.mac-relay/worker.sock').exists()"
+            command(['docker', 'exec', '--user', '10001:10001', names[1], 'python3', '-c', check_socket])
+            peer = subprocess.Popen(['docker', 'exec', '--user', '10001:10001', names[0], 'python3', '-c',
+                "import socket; s=socket.socket(socket.AF_UNIX); s.settimeout(10); "
+                "s.connect('/workspace/.mac-relay/worker.sock'); s.sendall(b'hello'); "
+                "d=b''\nwhile len(d)<5: d+=s.recv(5-len(d))\nassert d==b'world'"],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            assert read_exact(relay.stdout, 1) == b'J'
+            assert read_exact(relay.stdout, 5) == b'hello'
+            relay.stdin.write(b'world'); relay.stdin.flush()
+            _, error = peer.communicate(timeout=15)
+            assert peer.returncode == 0, error[-1000:]
+            relay.stdin.close(); relay.stdin = None
+            relay.communicate(timeout=15)
+            assert relay.returncode == 0
+        finally:
+            if peer and peer.poll() is None:
+                peer.terminate(); peer.communicate(timeout=10)
+            if relay.poll() is None:
+                relay.terminate(); relay.communicate(timeout=10)
         forbidden = str(base / 'volume/bob')
         check = ('from pathlib import Path; import os,fcntl,errno\nassert not Path(' + repr(forbidden)
                  + ").exists(); assert not Path('/workspace/../bob').exists()\n"
@@ -92,7 +140,6 @@ finally: p.unlink(missing_ok=True)
         denied_disk = command(['docker', 'exec', '--user', '10001:10001', names[0], 'python3', '-c', disk_probe])
         assert b'kernel quota denied' in denied_disk, denied_disk[-1000:]
         bob_before = json.loads(command(['docker', 'inspect', names[1]]))[0]['State']['Pid']
-        from ops.gateway import WORKER_EXEC
         bob = subprocess.Popen(['docker', 'exec', '-i', '--user', '10001:10001', names[1], *WORKER_EXEC, 'run'],
                                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         try:
@@ -128,6 +175,7 @@ finally: p.unlink(missing_ok=True)
             execute(names[1], 'release', json.dumps({'id': survived['id']}).encode() + b'\n')
             (root / 'evidence/team-isolation.json').write_text(json.dumps({'private_mounts': True,
                 'cross_user_fetch_denied': True, 'ext4_quota_bytes': own['budget_bytes'],
+                'mac_relay_other_tenant_denied': True, 'mac_relay_roundtrip': True,
                 'quota_exceeded': True, 'quota_attribute_changes_denied': True,
                 'alice_oom_exit': oom.returncode, 'bob_survived': True,
                 'cpu_limit': 0.5, 'verified_result_files': 2}))

@@ -209,6 +209,11 @@ def validate_status(state):
         raise ValueError('invalid running agent list')
     if state.get('server_id') is not None and (not isinstance(state['server_id'],str) or not re.fullmatch('[a-f0-9]{64}',state['server_id'])):
         raise ValueError('invalid authenticated server identity')
+    mac = state.get('mac')
+    if mac is not None and (not isinstance(mac, dict) or set(mac) != {'node_id', 'available'}
+            or not isinstance(mac['node_id'], str) or not re.fullmatch('[a-f0-9]{32}', mac['node_id'])
+            or type(mac['available']) is not bool):
+        raise ValueError('invalid private Mac status')
     scope=state.get('scope',{})
     if not isinstance(scope,dict) or not isinstance(scope.get('id','owner'),str) or not re.fullmatch('[a-z][a-z0-9-]{0,31}',scope.get('id','owner')):
         raise ValueError('invalid worker identity')
@@ -255,6 +260,12 @@ def fleet_status(server=None):
               ['cpu_total','cpu_reserved','cpu_available','ram_total','ram_reserved','ram_available',
                'disk_reserved','disk_available','active_count','max_jobs']}
     summary = {'servers_connected':len(eligible), 'servers_configured':len(rows), **totals}
+    macs = {}
+    for row in eligible:
+        mac = row['state'].get('mac')
+        if mac is not None:
+            macs[mac['node_id']] = macs.get(mac['node_id'], False) or mac['available']
+    summary.update(macs_connected=len(macs), macs_available=sum(macs.values()))
     # The existing one-server response remains compatible with installed clients.
     if len(rows) == 1 and rows[0]['connected']:
         value = dict(rows[0]['state'])
@@ -272,6 +283,8 @@ def fleet_status(server=None):
             entry.update(server_id=state.get('server_id'), scope=state.get('scope'), admit=state.get('admit'), maintenance=state.get('maintenance'),
                 arch=state.get('telemetry',{}).get('arch'), pool={key:pool[key] for key in totals if key in pool},
                 agents=[{key:a[key] for key in ['id','agent','project','started'] if key in a} for a in pool.get('active',[])[:4]])
+            if state.get('mac') is not None:
+                entry['mac'] = state['mac']
         compact.append(entry)
     value['connections'] = compact
     return value

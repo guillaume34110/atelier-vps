@@ -141,6 +141,8 @@
 "Global" = "Global";
 "Add a server" = "Add a server";
 "Servers" = "Servers";
+"Mac available" = "Mac available";
+"Mac busy" = "Mac busy";
 "Manage" = "Manage";
 "Global adds connected servers. Each task runs on one server." = "Global adds connected servers. Each task runs on one server.";
 "CPU %@ · RAM %@ %@ · %d agents" = "CPU %@ · RAM %@ %@ · %d agents";

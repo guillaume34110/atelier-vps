@@ -153,6 +153,12 @@ func runFleetChecks() throws {
                  "active": [], "active_count": 0, "max_jobs": 4, "ram_available": 4000,
                  "ram_total": 5000, "disk_available": 6000, "ram_accounting": ["used_bytes": 0]]]
     let snapshot = try VPSSnapshot.decode(JSONSerialization.data(withJSONObject: raw))
+    var macRaw = raw
+    macRaw["mac"] = ["node_id": String(repeating: "c", count: 32), "available": true]
+    let macSnapshot = try VPSSnapshot.decode(JSONSerialization.data(withJSONObject: macRaw))
+    precondition(macSnapshot.mac?.available == true)
+    macRaw["mac"] = ["node_id": "invalid", "available": true]
+    do { _ = try VPSSnapshot.decode(JSONSerialization.data(withJSONObject: macRaw)); preconditionFailure("invalid Mac identity accepted") } catch {}
     var sample = ServerSample(connection: first); sample.document = snapshot; sample.connected = true
     var administrator = sample; administrator.connection.admin_ssh_host = "paris-admin"
     precondition(administratorTarget([sample], selectedID: nil) == nil)

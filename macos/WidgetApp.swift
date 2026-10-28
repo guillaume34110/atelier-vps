@@ -947,11 +947,20 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             let agents = name.hasPrefix("agents-")
             monitor.showingAgents = agents
             administration.showingManagement = admin
+            if CommandLine.arguments.contains("--capture-mac-worker"),
+               let index = monitor.servers.firstIndex(where: { $0.connected && $0.document != nil }),
+               var document = monitor.servers[index].document {
+                document.mac = MacWorker(node_id: String(repeating: "c", count: 32), available: true)
+                monitor.servers[index].document = document
+            }
             if admin { administration.selectMode("allocated") }
             panel.setContentSize(NSSize(width: width, height: height))
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [self] in
                 do {
                     guard let view = panel.contentView else { throw MonitorError.invalidData }
+                    let macFixture = CommandLine.arguments.contains("--capture-mac-worker") &&
+                        monitor.servers.contains { $0.document?.mac?.node_id == String(repeating: "c", count: 32) }
+                    if CommandLine.arguments.contains("--capture-mac-worker") && !macFixture { throw MonitorError.invalidData }
                     view.layoutSubtreeIfNeeded()
                     guard view.bounds.width == width && view.bounds.height == height && monitor.compact == mini else {
                         fputs("Layout \(name) expected \(width)×\(height), actual \(view.bounds)\n", stderr); exit(1)
@@ -966,6 +975,7 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     evidence.append(["layout": name, "width": width, "height": height, "image": image.lastPathComponent,
                                      "mini": mini, "management": admin, "administrator_authenticated": administration.authorized,
                                      "agents": agents,
+                                     "mac_fixture": macFixture,
                                      "resolved_layout": WidgetLayout.resolve(width: width, height: height).rawValue,
                                      "meter_face_pixels": facePixels,
                                      "server_mode": monitor.document?.scope?.mode ?? "unknown", "settings_applied": false])
