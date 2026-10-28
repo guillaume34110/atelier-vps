@@ -13,7 +13,7 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(mcp_server.vps, 'transport', return_value=(0, json.dumps(state()).encode())) as transport, patch.object(mcp_server.client_config,'active_connections',return_value=[profile]):
             async with Client(mcp_server.server) as client:
                 tools = await client.list_tools()
-                self.assertEqual({t.name for t in tools.tools}, {'vps_status', 'vps_run', 'vps_fetch', 'vps_release',
+                self.assertEqual({t.name for t in tools.tools}, {'vps_status', 'vps_run', 'vps_wait', 'vps_fetch', 'vps_release',
                     'admin_settings_get', 'admin_settings_preview', 'admin_settings_apply', 'admin_invitation_create',
                     'vps_server_add','vps_connect_from_clipboard', 'vps_agent_desktop'})
                 run = next(tool for tool in tools.tools if tool.name == 'vps_run')
@@ -22,6 +22,14 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(result.is_error)
                 self.assertTrue(result.structured_content['ok'])
                 transport.assert_called_once()
+
+    async def test_wait_forwards_reference_and_returns_completion(self):
+        result = {'job_ref': 'preprod:' + 'a' * 32, 'status': 'passed', 'timed_out': False}
+        with patch.object(mcp_server.vps, 'wait_for_job', return_value=result) as wait:
+            async with Client(mcp_server.server) as client:
+                response = await client.call_tool('vps_wait', {'job_id': result['job_ref'], 'timeout': 15})
+                self.assertEqual(response.structured_content, result)
+                wait.assert_called_once_with(result['job_ref'], 15, None)
 
     async def test_release_requires_preserved_results_and_invalid_run_is_rejected(self):
         with patch.object(mcp_server.vps, 'transport') as transport:

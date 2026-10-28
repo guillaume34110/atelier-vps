@@ -60,6 +60,10 @@ start conservatively. Explicit GiB remain available. Admission never silently
 reduces a reservation to fit. See [measured RAM and private developer pools](docs/team.md)
 for both modes, separate quotas and the authenticated administrator MCP tools.
 
+`vps_run` waits for its result. To resume waiting for an already running job,
+use `vps_wait` or `atelier-vps wait connection:JOB_ID` and let the server return
+its final state without repeated agent polling. [Integration details](docs/integration.md).
+
 Fetch into explicitly bounded temporary storage, then preserve useful files
 before releasing the completed remote job:
 

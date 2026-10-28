@@ -43,6 +43,8 @@ class Fleet(unittest.TestCase):
                     'requested':{'cpus':request['cpus'],'ram_bytes':ram,'disk_bytes':request['disk_bytes'],'ram_source':'unprofiled'}}
         elif operation=='run':
             return 1,json.dumps({'id':'c'*32,'status':'failed','returncode':7}).encode()
+        elif operation=='fetch' and 'wait_timeout' in request:
+            result={'kind':'job_wait','id':request['id'],'status':'passed','timed_out':False,'argv':['secret']}
         else:raise AssertionError(operation)
         return 0,json.dumps(result).encode()
 
@@ -78,6 +80,18 @@ class Fleet(unittest.TestCase):
         self.assertEqual(result['job_ref'],'lyon:'+ 'c'*32)
         self.assertEqual(result['connection'],'lyon')
         self.assertEqual(len([x for x in self.calls if x[1]=='run']),1)
+
+    def test_wait_uses_original_authenticated_server_and_requires_capability(self):
+        self.states['lyon-worker']['capabilities']['job_wait'] = True
+        result = vps.wait_for_job('lyon:' + 'c' * 32, 3)
+        self.assertEqual(result['job_ref'], 'lyon:' + 'c' * 32)
+        self.assertEqual(result['status'], 'passed')
+        self.assertNotIn('argv', result)
+        self.assertEqual([call[0] for call in self.calls], ['lyon-worker', 'lyon-worker'])
+        with self.assertRaises(RuntimeError):
+            vps.wait_for_job('paris:' + 'c' * 32, 1)
+        with self.assertRaises(ValueError):
+            vps.wait_for_job('lyon:' + 'c' * 32, -1)
 
     def test_architecture_and_unknown_server_identity_are_not_guessed(self):
         self.states['lyon-worker']['telemetry']['arch']='x86_64'

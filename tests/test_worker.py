@@ -102,6 +102,51 @@ class ArchiveTests(unittest.TestCase):
             self.assertEqual((Path(tmp) / "download/result.txt").read_text(), "processed")
 
 
+class WaitTests(unittest.TestCase):
+    def test_wait_returns_only_after_receipt_and_reservation_finish(self):
+        ident = 'a' * 32
+        with tempfile.TemporaryDirectory() as tmp, patch.object(worker, 'ROOT', Path(tmp)):
+            job = Path(tmp) / 'jobs' / ident
+            job.mkdir(parents=True)
+            receipt = job / 'receipt.json'
+            receipt.write_text(json.dumps({'id': ident, 'status': 'running', 'argv': ['secret']}))
+            leases = [{'id': ident, 'orphaned': False}]
+            def finish(_):
+                receipt.write_text(json.dumps({'id': ident, 'status': 'passed', 'returncode': 0,
+                                               'ended': 1, 'resources': {}, 'argv': ['secret']}))
+                leases.clear()
+            with patch.object(worker.resources, 'leases', side_effect=lambda _: leases), \
+                    patch.object(worker.time, 'sleep', side_effect=finish):
+                stream = io.BytesIO()
+                worker.fetch({'id': ident, 'wait_timeout': 10}, stream)
+                self.assertEqual(json.loads(stream.getvalue()), {'kind': 'job_wait', 'id': ident,
+                                                                  'status': 'passed', 'timed_out': False})
+                self.assertNotIn(b'secret', stream.getvalue())
+
+    def test_timeout_or_orphan_is_never_success(self):
+        ident = 'b' * 32
+        with tempfile.TemporaryDirectory() as tmp, patch.object(worker, 'ROOT', Path(tmp)):
+            job = Path(tmp) / 'jobs' / ident
+            job.mkdir(parents=True)
+            (job / 'receipt.json').write_text(json.dumps({'id': ident, 'status': 'passed',
+                'returncode': 0, 'ended': 1, 'resources': {}}))
+            with patch.object(worker.resources, 'leases', return_value=[{'id': ident, 'orphaned': False}]):
+                self.assertEqual(worker.wait_job(ident, 0)['status'], 'running')
+                self.assertTrue(worker.wait_job(ident, 0)['timed_out'])
+            with patch.object(worker.resources, 'leases', return_value=[{'id': ident, 'orphaned': True}]):
+                self.assertEqual(worker.wait_job(ident, 10)['status'], 'unknown')
+            (job / 'receipt.json').write_text(json.dumps({'id': ident, 'status': 'failed',
+                'returncode': 1, 'ended': 1, 'reason': 'private log'}))
+            with patch.object(worker.resources, 'leases', return_value=[]):
+                self.assertEqual(worker.wait_job(ident, 0), {'kind': 'job_wait', 'id': ident,
+                                                              'status': 'failed', 'timed_out': False})
+            (job / 'receipt.json').write_text(json.dumps({'id': ident, 'status': 'passed'}))
+            with patch.object(worker.resources, 'leases', return_value=[]), self.assertRaises(ValueError):
+                worker.wait_job(ident, 0)
+            with self.assertRaises(ValueError):
+                worker.fetch({'id': ident, 'wait_timeout': 1, 'paths': ['receipt.json']}, io.BytesIO())
+
+
 class AdmissionTests(unittest.TestCase):
     def test_large_verified_project_quota_is_fully_available(self):
         with tempfile.TemporaryDirectory() as tmp, patch.object(worker, 'ROOT', Path(tmp)):
@@ -127,7 +172,7 @@ class AdmissionTests(unittest.TestCase):
                 return SimpleNamespace(f_bavail=(27 if path == capacity else 7) * worker.GIB,
                                        f_bfree=(27 if path == capacity else 7) * worker.GIB,
                                        f_blocks=(29 if path == capacity else 7) * worker.GIB, f_frsize=1)
-            with patch.dict(worker.os.environ, {"USEVPS_VOLUME_STATS": str(capacity), "USEVPS_VOLUME_ID": "test"}), patch.object(worker, "volume_ok", return_value=True), patch.object(worker.os, "statvfs", side_effect=space), patch.object(worker, "available_ram", return_value=5 * worker.GIB):
+            with patch.dict(worker.os.environ, {"USEVPS_VOLUME_STATS": str(capacity), "USEVPS_VOLUME_ID": "test", "USEVPS_HOST_RAM_RESERVE_GIB": "1"}), patch.object(worker, "volume_ok", return_value=True), patch.object(worker.os, "statvfs", side_effect=space), patch.object(worker, "available_ram", return_value=5 * worker.GIB):
                 s = worker.status()
                 self.assertEqual(s["free_bytes"], 27 * worker.GIB)
                 self.assertEqual(s["workspace_free_bytes"], 7 * worker.GIB)

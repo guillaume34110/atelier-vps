@@ -19,7 +19,7 @@ For another compatible host, configure this command with absolute paths:
 }}}
 ```
 
-Tools: `vps_status`, `vps_run`, `vps_fetch`, `vps_release`. Set the host's timeout
+Tools: `vps_status`, `vps_run`, `vps_wait`, `vps_fetch`, `vps_release`. Set the host's timeout
 above the longest remote job. The routing skill prefers compatible VPS work;
 it cannot override permissions, unavailable resources or incompatible runtimes.
 These tools share the widget's private registry and choose a compatible server
@@ -28,6 +28,33 @@ reference when fetching or releasing. `vps_server_add` and
 `vps_connect_from_clipboard` register connections; administrator settings and
 invitation tools require the separate administrator identity.
 See [multiple servers and invitations](fleet.md).
+
+`vps_run` holds one request open until the worker has completed the job and
+returns its receipt. Avoid repeatedly asking the model to poll for it. To wait
+for a job that is already running, obtain its ID from `vps_status` and call
+`vps_wait` with `job_id="connection:JOB_ID"`, or use:
+
+```sh
+atelier-vps wait connection:JOB_ID --timeout 3600
+```
+
+The worker waits over the existing authenticated connection and returns
+`passed`, `failed`, `running` (the wait expired) or `unknown` (the worker cannot
+confirm the result). A timeout or unknown state never means success: preserve
+the job and investigate instead of automatically starting it again. Fetch and
+verify the original outputs before releasing the job. The MCP host must keep
+the call alive; the server cannot wake a closed client or monitor a generation
+on another service without an integration for that service. No log, command or
+secret is included in the wait response.
+
+Run compatible CI and browser scenarios on the VPS when they do not depend on a
+personal browser account. Start the actual application and API, reuse one
+Chromium session for related checks, and return concise assertions and only the
+screenshots needed to verify the result. Existing examples use `CHROMIUM_PATH`.
+For personal mail or other account-specific sessions, keep the existing browser
+and its profile on the original machine. Save credentials only through the
+host's password manager or a secure CI secret store; do not copy profiles,
+cookies or credentials to the worker or put them in job arguments or logs.
 
 Fetch creates `output/task-tmp` in the supplied project. With the canonical
 `~/.local/bin/workspace-budget.py` helper, MCP uses that guard with a 0.6 GiB

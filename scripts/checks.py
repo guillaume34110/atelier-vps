@@ -276,6 +276,7 @@ def main():
         slow = subprocess.Popen(['docker', 'exec', '-i', '--user', '10001:10001', name, *WORKER_EXEC, 'run'],
                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         body = payload(['true'], files={'large.txt': 'x' * 128 * 1024}, agent='CI · sources en cours', ram_bytes=128 * 1024**2)
+        waiter = None
         try:
             slow.stdin.write(body[:10240]); slow.stdin.flush()
             pending = None
@@ -286,6 +287,12 @@ def main():
                     break
                 time.sleep(0.1)
             assert pending is not None, state
+            waiter = subprocess.Popen(['docker', 'exec', '-i', '--user', '10001:10001', name, *WORKER_EXEC, 'fetch'],
+                                      stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            waiter.stdin.write(json.dumps({'id': pending['job'], 'wait_timeout': 30}).encode() + b'\n')
+            waiter.stdin.close(); waiter.stdin = None
+            time.sleep(0.2)
+            assert waiter.poll() is None, 'wait returned while the upload was still active'
             # Expired caches cannot be removed while even an upload owns a lease.
             guard = "from pathlib import Path; import dependency_cache as c, resources; p=c.scope(Path('/workspace'), {'project':'expired-fixture'}); resources.write_json(p/'.retention.json', {'version':1,'last_used':0}); c.maintain(Path('/workspace')); assert p.exists()"
             command(['docker', 'exec', '--user', '10001:10001', name, 'python3', '-c', guard])
@@ -293,13 +300,18 @@ def main():
             out, errors = slow.communicate(timeout=60)
             assert slow.returncode == 0, errors[-1000:]
             completed = json.loads(out)
+            waiting, errors = waiter.communicate(timeout=30)
+            assert waiter.returncode == 0, errors[-1000:]
+            assert json.loads(waiting) == {'kind': 'job_wait', 'id': completed['id'], 'status': 'passed', 'timed_out': False}
             execute(name, 'release', json.dumps({'id': completed['id']}).encode() + b'\n')
             clean = "from pathlib import Path; import dependency_cache as c; root=Path('/workspace'); before=list((root/'cache/managed').iterdir()); old=[p for p in before if c.last_used(p)==0]; assert len(old)==1; c.maintain(root); assert not old[0].exists(); assert all(p.exists() for p in before if p not in old); assert c.status(root)['removed_scopes']==1"
             command(['docker', 'exec', '--user', '10001:10001', name, 'python3', '-c', clean])
         finally:
             if slow.poll() is None:
                 slow.terminate(); slow.wait(timeout=10)
-        print('Active transfer connection + safe idle 30-day cache retention: passed', flush=True)
+            if waiter and waiter.poll() is None:
+                waiter.terminate(); waiter.wait(timeout=10)
+        print('Server-side completion wait + active transfer and safe cache retention: passed', flush=True)
         peak_command = ['python3', '-c', 'data=bytearray(128*1024**2); print(len(data))']
         first_peak = json.loads(execute(name, 'run', payload(peak_command, ram_bytes=None)))
         assert first_peak['status'] == 'passed', first_peak
@@ -320,6 +332,8 @@ def main():
         execute(name, "release", json.dumps({"id": orphan["id"]}).encode() + b"\n")
         failed = json.loads(execute(name, "run", payload(["python3", "-c", "import time; time.sleep(5)"], timeout=1), success=False))
         assert failed["status"] == "failed" and failed["reason"] == "timeout", failed
+        failed_wait = json.loads(execute(name, 'fetch', json.dumps({'id': failed['id'], 'wait_timeout': 2}).encode() + b'\n'))
+        assert failed_wait['status'] == 'failed' and not failed_wait['timed_out'], failed_wait
         detail_tar = execute(name, 'fetch', json.dumps({'id': failed['id'], 'paths': ['diagnostic.json']}).encode() + b'\n')
         with tarfile.open(fileobj=io.BytesIO(detail_tar)) as details:
             timeout_card = json.load(details.extractfile('diagnostic.json'))

@@ -5,6 +5,7 @@ import fcntl
 import hashlib
 import io
 import json
+import math
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -142,7 +143,7 @@ def status():
     state.update(pool=pool, busy=bool(pool['active_count']) or maintenance, maintenance=maintenance,
                  admit=not maintenance and resources.fits(pool, 1, 64 * MIB, MIB),
                  capabilities={'ram_profiles': True, 'quota_attributes_protected': True, 'failure_details': True,
-                               'planning': True, 'desktop_sessions': True},
+                               'planning': True, 'desktop_sessions': True, 'job_wait': True},
                  scope={'id': os.environ.get('USEVPS_TENANT', 'owner'),
                         'mode': os.environ.get('USEVPS_MODE', 'opportunistic')})
     return state
@@ -450,7 +451,51 @@ def run_job(request, stream, *, ident=None, persistent=None, profile_ready=None)
         return result
 
 
+def wait_job(ident, timeout):
+    path = job_path(ident)
+    if type(timeout) is not int or not 0 <= timeout <= 3600:
+        raise ValueError('wait timeout must be an integer from 0 to 3600 seconds')
+    deadline = time.monotonic() + timeout
+    while True:
+        with resources.resource_lock(ROOT):
+            active = next((lease for lease in resources.leases(ROOT) if lease['id'] == ident), None)
+            file = path / 'receipt.json'
+            if path.is_symlink() or file.is_symlink():
+                raise ValueError('invalid job receipt')
+            if file.exists():
+                if file.stat().st_size > 65536:
+                    raise ValueError('invalid job receipt')
+                state = json.loads(file.read_text())
+                if not isinstance(state, dict) or state.get('id') != ident or state.get('status') not in ('running', 'passed', 'failed'):
+                    raise ValueError('invalid job receipt')
+                status = state['status']
+                if status != 'running' and (type(state.get('ended')) not in (int, float)
+                                            or not math.isfinite(state['ended']) or type(state.get('returncode')) is not int):
+                    raise ValueError('incomplete job receipt')
+                if status == 'passed' and (state['returncode'] != 0 or not isinstance(state.get('resources'), dict)):
+                    raise ValueError('incomplete job receipt')
+            elif active:
+                status = 'running'
+            else:
+                raise ValueError('job not found or already released')
+            if (active and active.get('orphaned')) or (status == 'running' and not active):
+                status = 'unknown'
+            elif status != 'running' and not active:
+                return {'kind': 'job_wait', 'id': ident, 'status': status, 'timed_out': False}
+        if status == 'unknown':
+            return {'kind': 'job_wait', 'id': ident, 'status': status, 'timed_out': False}
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return {'kind': 'job_wait', 'id': ident, 'status': 'running', 'timed_out': True}
+        time.sleep(min(1, remaining))
+
+
 def fetch(request, stream):
+    if 'wait_timeout' in request:
+        if set(request) != {'id', 'wait_timeout'}:
+            raise ValueError('wait cannot include result paths')
+        stream.write(json.dumps(wait_job(request['id'], request['wait_timeout'])).encode())
+        return
     path = job_path(request["id"])
     if 'diagnostic.json' in request.get('paths', []) and request['paths'] != ['diagnostic.json']:
         raise ValueError('fetch failure details separately from job files')
