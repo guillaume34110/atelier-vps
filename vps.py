@@ -305,6 +305,25 @@ def job_target(reference, server=None):
     return profile, ident
 
 
+def wait_for_job(reference, timeout=3600, server=None):
+    if type(timeout) is not int or not 0 <= timeout <= 3600:
+        raise ValueError('wait timeout must be an integer from 0 to 3600 seconds')
+    profile, ident = job_target(reference, server)
+    row = server_states(profile['id'])[0]
+    if not row['connected']:
+        raise RuntimeError('SSH unavailable or worker identity changed')
+    if not row['state'].get('capabilities', {}).get('job_wait'):
+        raise RuntimeError('this worker does not support job waiting; update the worker first')
+    rc, value = json_request(profile['ssh_host'], 'fetch', {'id': ident, 'wait_timeout': timeout}, timeout=timeout + 30)
+    if (rc or value.get('kind') != 'job_wait' or value.get('id') != ident
+            or value.get('status') not in ('running', 'passed', 'failed', 'unknown')
+            or type(value.get('timed_out')) is not bool
+            or value['timed_out'] != (value['status'] == 'running')):
+        raise RuntimeError('invalid wait response; preserve the job and inspect its state')
+    return {'job_ref': profile['id'] + ':' + ident,
+            'status': value['status'], 'timed_out': value['timed_out']}
+
+
 def admin_request(action, server=None, **request):
     profiles=client_config.active_connections()
     if not server and len(profiles)!=1:
@@ -416,6 +435,9 @@ def main():
     fetch = commands.add_parser("fetch")
     fetch.add_argument("id")
     fetch.add_argument("paths", nargs="+", help="e.g. work/result.txt stdout.log receipt.json")
+    wait = commands.add_parser('wait', help='wait on the server for a running job to finish')
+    wait.add_argument('id', help='qualified connection:job reference')
+    wait.add_argument('--timeout', type=int, default=3600)
     release = commands.add_parser("release")
     release.add_argument("id")
     release.add_argument("--confirmed", action="store_true", required=True)
@@ -482,6 +504,12 @@ def main():
         rc, data = transport(profile['ssh_host'], "release", {"id": ident},timeout=30)
         print(data.decode().strip())
         return rc
+    if args.action == 'wait':
+        if args.host:
+            raise ValueError('wait requires a saved server connection')
+        result = wait_for_job(args.id, args.timeout, args.server)
+        print(json.dumps(result))
+        return 0 if result['status'] == 'passed' else 1
     if args.action == 'run':
         argv = args.argv[1:] if args.argv[:1] == ['--'] else args.argv
         if not argv or not args.source.is_dir():

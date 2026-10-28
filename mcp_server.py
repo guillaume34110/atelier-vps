@@ -121,6 +121,18 @@ def vps_run(source: str, argv: list[str], agent: str, disk_gib: float,
 
 
 @server.tool(structured_output=True)
+def vps_wait(job_id: str, timeout: int = 3600, server: str | None = None) -> dict[str, Any]:
+    """Wait on the VPS for an existing job's final state, without repeated model polling.
+
+    Use the connection:job reference returned by vps_run or vps_status. This
+    call returns when the job ends or the bounded timeout expires; a timeout or
+    unknown state is not a success. It does not fetch or release results. The
+    MCP host must keep the request alive for up to timeout + 30 seconds.
+    """
+    return vps.wait_for_job(job_id, timeout, server)
+
+
+@server.tool(structured_output=True)
 def vps_fetch(job_id: str, paths: list[str], project: str, server: str | None = None) -> dict[str, Any]:
     """Fetch <=256 MiB with SHA256 verification into the local project's task workspace.
 

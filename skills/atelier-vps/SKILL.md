@@ -9,8 +9,18 @@ the configured VPS, without waiting for local memory pressure. Check
 RAM and disk for the complete peak. Busy can be true while admission is true:
 several agents can share the pool.
 
-Portable tasks default to either architecture; pin `arch="aarch64"` or
+Use `arch="any"` for portable tasks; pin `arch="aarch64"` or
 `arch="x86_64"` when dependencies or outputs are architecture-specific.
+
+`vps_run` already waits for the final receipt: make one call and let the tool
+return, without repeatedly polling `vps_status`, logs or a shell. To await a
+job already running, call `vps_wait` once with its `connection:job_id` from
+`vps_status`; the worker waits and returns a compact final state. Keep the MCP
+call open and use a bounded timeout (up to 3600 seconds), not a model-driven
+polling loop. `running` on timeout and `unknown` are not success: preserve the
+job and investigate rather than relaunching it. A completion wake-up requires an
+active supported MCP call; a closed host or an unrelated external service cannot
+be awakened or monitored by Atelier VPS automatically.
 
 Call `vps_run` with the actual source directory, an argument array, a short public
 agent label and explicit CPU, disk and timeout reservations. Omit `ram_gib` in MCP
@@ -35,6 +45,14 @@ irreplaceable files in these disposable caches. Base tools remain installed.
 After an idle scope expires, budget for downloading its dependencies again.
 For browser work use `CHROMIUM_PATH`, `--no-sandbox` and
 `--disable-dev-shm-usage`. Run real required services before claiming E2E success.
+Run browser tests and CI without personal credentials on the VPS; batch the
+scenario in one browser session and return only assertions, errors and necessary
+screenshots. Prefer a connector or an API when no visual browser interaction is
+needed. Reuse an existing authenticated local browser for personal accounts;
+never transfer its profile, cookies, credentials or account sessions to the VPS.
+Keep saved credentials in the host's password manager or secure CI secret store,
+not in prompts, commands, logs, source files, screenshots or managed caches.
+Use isolated test accounts and synthetic data for remote checks.
 
 Use `vps_fetch` for logs, receipts and useful outputs; SHA256 verification is
 mandatory. Preserve useful files outside the temporary directory, then remove
@@ -53,7 +71,7 @@ the repository's integration guide for supported host setup.
 
 In allocated team mode, only the authenticated developer's worker and quotas are
 available. Shared tools are read-only; writable caches and projects stay private.
-Keep ordinary work on the four development tools. `admin_settings_*` requires
+Keep ordinary work on the development tools. `admin_settings_*` requires
 separate administrator authentication and is only for explicitly requested policy
 changes; active work and pending transactions must not be bypassed. See the
 repository's `docs/team.md` for the administrator workflow.
