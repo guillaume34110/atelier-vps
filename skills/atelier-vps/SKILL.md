@@ -11,6 +11,10 @@ several agents can share the pool.
 
 Use `arch="any"` for portable tasks; pin `arch="aarch64"` or
 `arch="x86_64"` when dependencies or outputs are architecture-specific.
+For each project, identify the compatible part before executing: send Linux
+tests, builds, lint, headless browser checks and processing to an admissible VPS
+by default. Split mixed workloads so macOS, devices, GPU and personal-account
+steps remain on the required machine. Do not move or interrupt a running task.
 
 `vps_run` already waits for the final receipt: make one call and let the tool
 return, without repeatedly polling `vps_status`, logs or a shell. To await a
@@ -22,14 +26,13 @@ job and investigate rather than relaunching it. A completion wake-up requires an
 active supported MCP call; a closed host or an unrelated external service cannot
 be awakened or monitored by Atelier VPS automatically.
 
-For repeated compatible work, prepare a managed project with
-`vps_project_prepare`, retain its `connection:project:revision` reference and
-use `vps_project_run` for later jobs. Pass the local `source` path when available
-so edits reject stale revisions; prepare a new version after changes. Each job
-gets a separate verified copy and complete CPU/RAM/disk reservation. Project
-sources remain private, count against quota and are never automatically removed.
-Fetch and preserve the ordinary job's results before release. These versions do
-not synchronize edits made inside a job back to the stored project automatically.
+Prefer streamed `vps_run` for one-off or frequently changing sources, so a task
+does not create a permanent project copy. For genuinely recurring work, reuse an
+existing managed version with `vps_project_run` and the local `source` path to
+reject stale versions. Prepare a new version only when repeated reuse or the
+user's request justifies its quota cost. Each job gets a separate verified copy
+and complete CPU/RAM/disk reservation. Project versions remain private and are
+never automatically deleted or synchronized back from a job.
 
 Call `vps_run` with the actual source directory, an argument array, a short public
 agent label and explicit CPU, disk and timeout reservations. Omit `ram_gib` in MCP
@@ -63,10 +66,13 @@ Keep saved credentials in the host's password manager or secure CI secret store,
 not in prompts, commands, logs, source files, screenshots or managed caches.
 Use isolated test accounts and synthetic data for remote checks.
 
-Use `vps_fetch` for logs, receipts and useful outputs; SHA256 verification is
-mandatory. Preserve useful files outside the temporary directory, then remove
-only your own completed transfer temporaries. Call `vps_release` only after that
-preservation. Other jobs and results must remain intact.
+After each finished task, promptly `vps_fetch` its receipt, needed logs and useful
+outputs, verify SHA256, and preserve what is needed outside the temporary
+directory. Then `vps_release` that job and remove only your own completed local
+transfer temporaries. If fetching or verification fails, or the state is uncertain,
+leave the job intact; preserve failure evidence before any release. Do not purge
+other jobs, project versions, untracked caches or personal data. Marked dependency
+caches expire after 30 idle days under the existing exclusive-lock cleanup.
 
 Keep macOS APIs, Metal/MLX, GPU work, Docker daemon tasks, Android emulators and
 incompatible SDK/NDK binaries on a compatible machine. A timeout, memory stop,
