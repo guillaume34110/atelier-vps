@@ -30,6 +30,11 @@ reference when fetching or releasing. `vps_server_add` and
 invitation tools require the separate administrator identity.
 See [multiple servers and invitations](fleet.md).
 
+Codex-managed Git worktrees under `~/.codex/worktrees` can be used as sources
+after their Git registration and checkout backlink are verified. The surrounding
+Codex state, nested private directories, credentials, symlinks and hard-linked
+files are never transferred. An explicit source-root policy still applies.
+
 `vps_run` holds one request open until the worker has completed the job and
 returns its receipt. Avoid repeatedly asking the model to poll for it. To wait
 for a job that is already running, obtain its ID from `vps_status` and call

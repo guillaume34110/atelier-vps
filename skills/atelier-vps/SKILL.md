@@ -33,6 +33,8 @@ reject stale versions. Prepare a new version only when repeated reuse or the
 user's request justifies its quota cost. Each job gets a separate verified copy
 and complete CPU/RAM/disk reservation. Project versions remain private and are
 never automatically deleted or synchronized back from a job.
+For a Codex-managed Git worktree, pass the checkout directory as `source`; the
+client verifies its registration and filters private files. Never send `~/.codex`.
 
 Call `vps_run` with the actual source directory, an argument array, a short public
 agent label and explicit CPU, disk and timeout reservations. Omit `ram_gib` in MCP

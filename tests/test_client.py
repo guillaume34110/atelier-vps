@@ -1,3 +1,5 @@
+import contextlib
+import io
 import json
 from pathlib import Path
 import tempfile
@@ -5,12 +7,22 @@ import unittest
 from unittest.mock import patch
 
 import client_config
+import vps
 from scripts.install import timeout_setting
 from ops.render_compose import bindings
 from scripts.checks import ssh_frontends
 
 
 class ClientConfigurationTests(unittest.TestCase):
+    def test_global_status_alias_keeps_the_whole_fleet(self):
+        with patch('sys.argv', ['vps.py', 'status', '--global']), patch.object(
+                vps, 'fleet_status', return_value={'ok': True}) as status, contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(vps.main(), 0)
+            status.assert_called_once_with(None)
+        with patch('sys.argv', ['vps.py', '--server', 'one', 'status', '--global']), contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                vps.main()
+
     def test_qa_teardown_selects_only_its_own_ssh_frontends(self):
         listing = '100 1 docker\n101 100 /usr/bin/ssh\n102 101 ssh\n103 1 ssh\n104 1 python\n'
         with patch('scripts.checks.subprocess.check_output', return_value=listing):
