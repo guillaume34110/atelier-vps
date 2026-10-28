@@ -13,6 +13,7 @@ def main():
     parser.add_argument('--app', type=Path, required=True)
     parser.add_argument('--require-telemetry', action='store_true')
     parser.add_argument('--layouts', action='store_true', help='capture narrow, standard, wide, short, mini and administrator layouts')
+    parser.add_argument('--mac-fixture', action='store_true', help='show a synthetic Mac status in layout captures')
     parser.add_argument('--admin', action='store_true', help='verify real administrator get/preview/apply with an unchanged policy')
     parser.add_argument('--failure', action='store_true', help='open a real failed activity and capture its authenticated explanation')
     parser.add_argument('--failure-id', help='capture only this owned failed task')
@@ -21,11 +22,14 @@ def main():
         parser.error('capture failure details separately from layouts and administrator changes')
     if args.failure_id and (not args.failure or not re.fullmatch('[a-f0-9]{32}', args.failure_id)):
         parser.error('use --failure-id with --failure and a valid task ID')
+    if args.mac_fixture and not args.layouts:
+        parser.error('use --mac-fixture with --layouts')
     root = Path(os.environ['TASK_WORKSPACE'])
     image = root / 'widget.png'
     binary = args.app / 'Contents/MacOS/usevps'
     subprocess.run([str(binary), '--capture', str(image), '--exercise-controls', '--exit-after-capture',
                     *(['--capture-layouts'] if args.layouts else []), *(['--exercise-admin'] if args.admin else []),
+                    *(['--capture-mac-worker'] if args.mac_fixture else []),
                     *(['--capture-failure'] if args.failure else []),
                     *(['--failure-id',args.failure_id] if args.failure_id else [])], check=True, timeout=100)
     result = json.loads(image.with_suffix('.json').read_text())
@@ -61,6 +65,7 @@ def main():
         if result['administrator_authenticated']:
             assert {'admin-narrow', 'admin', 'admin-wide'} <= names
         for item in layouts:
+            if args.mac_fixture: assert item['mac_fixture'] is True
             assert (root / item['image']).read_bytes().startswith(b'\x89PNG\r\n\x1a\n')
             assert item['settings_applied'] is False
             assert item['mini'] == (item['height'] < 220)

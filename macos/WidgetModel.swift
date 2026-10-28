@@ -90,6 +90,12 @@ struct UserScope: Codable {
     let mode: String
 }
 
+struct MacWorker: Codable {
+    let node_id: String
+    let available: Bool
+    var valid: Bool { node_id.range(of: "^[a-f0-9]{32}$", options: .regularExpression) != nil }
+}
+
 struct VPSSnapshot: Codable {
     let ok: Bool
     let busy: Bool
@@ -106,11 +112,12 @@ struct VPSSnapshot: Codable {
     var maintenance: Bool? = nil
     var server_id: String? = nil
     var desktop: DesktopSession? = nil
+    var mac: MacWorker? = nil
 
     static func decode(_ data: Data) throws -> VPSSnapshot {
         guard data.count <= 65536 else { throw MonitorError.invalidData }
         let value = try JSONDecoder().decode(VPSSnapshot.self, from: data)
-        guard value.desktop?.valid ?? true else { throw MonitorError.invalidData }
+        guard value.desktop?.valid ?? true, value.mac?.valid ?? true else { throw MonitorError.invalidData }
         let numbers = [value.budget_bytes, value.workspace_free_bytes, value.used_bytes,
                        value.free_bytes, value.reserve_bytes, value.host_available_ram]
         guard value.ok, value.budget_bytes > 0,

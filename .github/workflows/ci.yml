@@ -56,6 +56,9 @@ jobs:
         run: |
           mkdir -p "$TASK_WORKSPACE"
           python3 macos/build.py
+          xcrun swiftc macos/compute/VM.swift -o "$TASK_WORKSPACE/mac-compute-vm"
+          codesign --force --sign - --entitlements macos/compute/virtualization.entitlements "$TASK_WORKSPACE/mac-compute-vm"
+          codesign --verify --strict "$TASK_WORKSPACE/mac-compute-vm"
       - name: Keep concise Mac build proof
         uses: actions/upload-artifact@v4
         with:

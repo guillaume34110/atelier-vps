@@ -136,6 +136,11 @@ Running jobs, immutable tools, sources, results and untracked legacy caches are
 never swept. A cold scope downloads its locked dependencies again; allow that
 peak in the disk reservation.
 
+An Apple Silicon Mac can optionally lend spare capacity to agents already on
+the developer's VPS. The Mac checks its own load and disk reserve before
+starting a single isolated Linux VM on demand. Its private files and browser
+profiles are not shared. See [Mac worker setup and limits](docs/mac-worker.md).
+
 ## Designed to be understood
 
 Read the [architecture](docs/architecture.md), [security model](SECURITY.md),

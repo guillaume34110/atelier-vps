@@ -145,7 +145,8 @@ def status():
     state.update(pool=pool, busy=bool(pool['active_count']) or maintenance, maintenance=maintenance,
                  admit=not maintenance and resources.fits(pool, 1, 64 * MIB, MIB),
                  capabilities={'ram_profiles': True, 'quota_attributes_protected': True, 'failure_details': True,
-                               'planning': True, 'desktop_sessions': True, 'job_wait': True, 'project_sources': True},
+                               'planning': True, 'desktop_sessions': True, 'job_wait': True, 'project_sources': True,
+                               'mac_worker': True},
                  scope={'id': os.environ.get('USEVPS_TENANT', 'owner'),
                         'mode': os.environ.get('USEVPS_MODE', 'opportunistic')})
     return state
@@ -153,6 +154,8 @@ def status():
 
 def public_status():
     state = status()
+    import mac_relay
+    state['mac'] = mac_relay.status(ROOT)
     server_id = os.environ.get('USEVPS_SERVER_ID')
     if server_id and re.fullmatch('[a-f0-9]{64}', server_id):
         state['server_id'] = server_id
@@ -673,6 +676,10 @@ def main():
     elif action == 'desktop':
         import desktop_service
         desktop_service.dispatch(read_request())
+    elif action == 'mac':
+        import mac_relay
+        mac_relay.listen(ROOT, read_request(), sys.stdin.fileno(), sys.stdout.fileno(),
+                         scope=os.environ.get('USEVPS_TENANT', 'owner'), server_id=os.environ.get('USEVPS_SERVER_ID'))
     elif action == "fetch":
         fetch(read_request(), sys.stdout.buffer)
     elif action == "release":

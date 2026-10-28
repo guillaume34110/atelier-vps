@@ -21,7 +21,7 @@ def server_identity():
 
 def main():
     operation = os.environ.get("SSH_ORIGINAL_COMMAND", "").strip()
-    if operation not in {"status", "plan", "run", "fetch", "release", "desktop"}:
+    if operation not in {"status", "plan", "run", "fetch", "release", "desktop", "mac"}:
         raise ValueError("unsupported worker operation")
     config = json.loads(Path("/etc/usevps-gateway.json").read_text())
     process_ceiling = config.get('pids_limit', 512)
@@ -44,7 +44,7 @@ def main():
         config = {**config, 'container': tenant['container'], 'workspace': tenant['workspace']}
         transaction = Path('/etc/atelier-vps-team.pending.json')
         pending = transaction.exists() and name in json.loads(transaction.read_text())['affected']
-        if pending and operation == 'run':
+        if pending and operation in {'run', 'mac'}:
             raise RuntimeError('developer settings update pending; existing results are preserved')
     mount = subprocess.check_output(["findmnt", "-n", "-o", "UUID,OPTIONS", "--mountpoint", config["mount"]], text=True).strip().split()
     if len(mount) != 2 or mount[0] != config["volume_id"] or "prjquota" not in mount[1].split(","):
