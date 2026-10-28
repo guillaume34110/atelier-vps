@@ -64,6 +64,19 @@ for both modes, separate quotas and the authenticated administrator MCP tools.
 use `vps_wait` or `atelier-vps wait connection:JOB_ID` and let the server return
 its final state without repeated agent polling. [Integration details](docs/integration.md).
 
+For recurring work, store a versioned source snapshot on one server and reuse it
+without uploading the same project each time:
+
+```sh
+atelier-vps project-prepare --source ./my-project --id my-project --disk-gib 1
+# Use the returned connection:project:revision reference.
+atelier-vps project-run --source ./my-project --agent "Tests · API" --disk-gib 1 PROJECT_REF -- npm test
+```
+
+Each task receives its own verified copy, so parallel tasks cannot overwrite the
+stored version. Prepare a new version after local edits. Sources remain on the
+developer's VPS and count against its quota; they are never automatically deleted.
+
 Fetch into explicitly bounded temporary storage, then preserve useful files
 before releasing the completed remote job:
 

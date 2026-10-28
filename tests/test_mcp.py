@@ -14,6 +14,7 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
             async with Client(mcp_server.server) as client:
                 tools = await client.list_tools()
                 self.assertEqual({t.name for t in tools.tools}, {'vps_status', 'vps_run', 'vps_wait', 'vps_fetch', 'vps_release',
+                    'vps_project_prepare', 'vps_project_run',
                     'admin_settings_get', 'admin_settings_preview', 'admin_settings_apply', 'admin_invitation_create',
                     'vps_server_add','vps_connect_from_clipboard', 'vps_agent_desktop'})
                 run = next(tool for tool in tools.tools if tool.name == 'vps_run')
@@ -30,6 +31,19 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
                 response = await client.call_tool('vps_wait', {'job_id': result['job_ref'], 'timeout': 15})
                 self.assertEqual(response.structured_content, result)
                 wait.assert_called_once_with(result['job_ref'], 15, None)
+
+    async def test_project_tools_forward_stored_reference(self):
+        reference = 'preprod:demo:' + 'a' * 64
+        with patch.object(mcp_server.vps, 'prepare_project', return_value=(0, {'project_ref': reference})) as prepare, \
+                patch.object(mcp_server.vps, 'run_project', return_value=(0, {'status': 'passed'})) as run:
+            async with Client(mcp_server.server) as client:
+                result = await client.call_tool('vps_project_prepare', {'source': '/source', 'project_id': 'demo', 'disk_gib': 1})
+                self.assertEqual(result.structured_content['project_ref'], reference)
+                result = await client.call_tool('vps_project_run', {'project_ref': reference, 'argv': ['true'],
+                                                                     'agent': 'Tests', 'disk_gib': 1})
+                self.assertEqual(result.structured_content['status'], 'passed')
+                prepare.assert_called_once()
+                run.assert_called_once()
 
     async def test_release_requires_preserved_results_and_invalid_run_is_rejected(self):
         with patch.object(mcp_server.vps, 'transport') as transport:

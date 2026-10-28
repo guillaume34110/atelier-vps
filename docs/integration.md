@@ -19,7 +19,8 @@ For another compatible host, configure this command with absolute paths:
 }}}
 ```
 
-Tools: `vps_status`, `vps_run`, `vps_wait`, `vps_fetch`, `vps_release`. Set the host's timeout
+Tools: `vps_status`, `vps_run`, `vps_project_prepare`, `vps_project_run`, `vps_wait`,
+`vps_fetch`, `vps_release`. Set the host's timeout
 above the longest remote job. The routing skill prefers compatible VPS work;
 it cannot override permissions, unavailable resources or incompatible runtimes.
 These tools share the widget's private registry and choose a compatible server
@@ -46,6 +47,18 @@ verify the original outputs before releasing the job. The MCP host must keep
 the call alive; the server cannot wake a closed client or monitor a generation
 on another service without an integration for that service. No log, command or
 secret is included in the wait response.
+
+For a project used repeatedly, `vps_project_prepare` transfers its filtered
+sources into a versioned, developer-private location on one updated worker.
+Record the returned `connection:project:revision` reference; preserve and release
+the separate preparation job as usual. `vps_project_run` materializes a verified
+copy inside each new reserved job, without transferring the project again. Pass
+the local `source` path when available: changed files reject the old revision,
+and preparing again creates a new version without overwriting the old one.
+Concurrent tasks operate on separate copies; retrieve their results with `vps_fetch`.
+Sources are limited to the normal 64 MiB filter, count against the worker quota,
+and are never automatically removed. A project reference belongs to one
+developer and one server; another team member prepares their own copy.
 
 Run compatible CI and browser scenarios on the VPS when they do not depend on a
 personal browser account. Start the actual application and API, reuse one
