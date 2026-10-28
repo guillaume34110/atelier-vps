@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tarfile
@@ -26,11 +27,61 @@ SKIP = {".git", "node_modules", ".venv", "venv", ".cache", "__pycache__",
 SKIP.update({'deployment.local.json', 'docker-compose.local.yaml', 'auth.json', 'credentials.json'})
 
 
+def managed_worktree(project, home):
+    """Accept only a registered Git worktree, never the surrounding Codex state."""
+    worktrees = (home / '.codex/worktrees').resolve()
+    if project == worktrees or not project.is_relative_to(worktrees):
+        return False
+    for root in (project, *project.parents):
+        if root == worktrees:
+            break
+        marker = root / '.git'
+        if marker.is_symlink() or not marker.is_file():
+            continue
+        if any(part in SKIP or part.casefold() == 'claude.md'
+               for part in project.relative_to(root).parts):
+            return False
+        try:
+            def small_file(path):
+                info = path.lstat()
+                if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > 4096:
+                    raise ValueError('unsafe Git worktree metadata')
+                fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+                try:
+                    info = os.fstat(fd)
+                    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > 4096:
+                        raise ValueError('unsafe Git worktree metadata')
+                    return os.read(fd, 4097).decode('utf-8').strip()
+                finally:
+                    os.close(fd)
+
+            value = small_file(marker)
+            if not value.startswith('gitdir: '):
+                return False
+            gitdir = Path(value[8:])
+            gitdir = Path(os.path.abspath(gitdir if gitdir.is_absolute() else root / gitdir))
+            common = gitdir.parent.parent
+            protected = [(home / name).resolve() for name in ['.ssh', '.config', '.codex', '.claude', '.agents']]
+            if (gitdir.parent.name != 'worktrees' or common.name != '.git'
+                    or any(path.is_symlink() for path in (gitdir, *gitdir.parents))
+                    or not gitdir.is_dir() or any(common.is_relative_to(path) for path in protected)):
+                return False
+            backlink = Path(small_file(gitdir / 'gitdir'))
+            backlink = Path(os.path.abspath(backlink if backlink.is_absolute() else gitdir / backlink))
+            return backlink == marker and Path(os.path.abspath(gitdir / small_file(gitdir / 'commondir'))) == common
+        except (OSError, UnicodeError, ValueError):
+            return False
+    return False
+
+
 def inputs(project):
     project=project.resolve()
-    private=[(Path.home()/name).resolve() for name in ['.ssh','.config','.codex','.claude','.agents']]
+    home=Path.home().resolve()
+    private=[(home/name).resolve() for name in ['.ssh','.config','.claude','.agents']]
     private.append(client_config.config_path().parent.resolve())
-    if project in {Path('/'),Path.home()} or any(project.is_relative_to(path) for path in private):
+    codex=(home/'.codex').resolve()
+    if (project in {Path('/'),home} or any(project.is_relative_to(path) for path in private)
+            or project.is_relative_to(codex) and not managed_worktree(project, home)):
         raise ValueError('choose a project directory outside personal credentials and agent state')
     allowed=os.environ.get('ATELIER_VPS_SOURCE_ROOTS')
     if allowed:
@@ -41,15 +92,21 @@ def inputs(project):
         if not any(project.is_relative_to(Path(path).resolve()) for path in roots):
             raise ValueError('this project is outside the authorized source roots')
     total = 0
+    private_children = [path for path in private if path.is_relative_to(project)]
     for base, dirs, files in os.walk(project, followlinks=False):
-        dirs[:] = sorted(d for d in dirs if d not in SKIP and d.casefold()!='claude.md' and not (Path(base) / d).is_symlink())
+        dirs[:] = sorted(d for d in dirs if d not in SKIP and d != '.env' and d.casefold()!='claude.md'
+                         and not (Path(base) / d).is_symlink()
+                         and not any((Path(base) / d).is_relative_to(path) for path in private_children))
         for name in sorted(files):
             file = Path(base) / name
             if (name in SKIP or name.casefold()=='claude.md' or name == ".env" or name.startswith((".env.", 'id_ed25519', 'id_rsa'))
                     or name.startswith('ssh_host_') and name.endswith('_key')
                     or name.endswith((".pem", ".key")) or file.is_symlink()):
                 continue
-            total += file.stat().st_size
+            info = file.lstat()
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                raise ValueError('source contains a hard-linked or non-regular file')
+            total += info.st_size
             if total > INPUT_LIMIT:
                 raise ValueError("input exceeds 64 MiB; select a smaller source directory")
             yield file, str(file.relative_to(project))
@@ -469,7 +526,9 @@ def main():
     parser.add_argument("--host", help='existing restricted SSH alias; legacy explicit target')
     parser.add_argument('--server', help='registered connection ID')
     commands = parser.add_subparsers(dest="action", required=True)
-    commands.add_parser("status")
+    status = commands.add_parser("status")
+    status.add_argument('--global', dest='global_status', action='store_true',
+                        help='compare all registered servers (the default)')
     servers = commands.add_parser('servers', help='list or register a private server connection')
     servers.add_argument('operation', nargs='?', choices=['list','add','enable','disable'], default='list')
     servers.add_argument('--id')
@@ -583,6 +642,8 @@ def main():
         result=admin_request(operation,args.server,**request)
         print(json.dumps(result));return 1 if result.get('ok') is False else 0
     if args.action == "status":
+        if args.global_status and (args.host or args.server):
+            parser.error('--global cannot be combined with --host or --server')
         if args.host:
             rc, data = transport(args.host,'status',timeout=15)
             print(data.decode().strip());return rc
