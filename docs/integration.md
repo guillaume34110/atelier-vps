@@ -48,7 +48,10 @@ the call alive; the server cannot wake a closed client or monitor a generation
 on another service without an integration for that service. No log, command or
 secret is included in the wait response.
 
-For a project used repeatedly, `vps_project_prepare` transfers its filtered
+For one-off work or frequently changing sources, use `vps_run` to stream the
+filtered sources for the job, then fetch and preserve the needed results and
+release the job promptly. This avoids retaining a project version after each edit.
+For a stable project used repeatedly, `vps_project_prepare` transfers its filtered
 sources into a versioned, developer-private location on one updated worker.
 Record the returned `connection:project:revision` reference; preserve and release
 the separate preparation job as usual. `vps_project_run` materializes a verified
