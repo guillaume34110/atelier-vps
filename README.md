@@ -52,6 +52,10 @@ atelier-vps run --source ./my-project --agent "Tests · API" \
 Sources are filtered and streamed without a second local archive. Local
 dependencies, Git history, common secret files and generated outputs are
 excluded. Recreate dependencies from lockfiles for the selected Linux architecture.
+Source transfers fit the task's declared disk budget, with no fixed 64 MiB cap.
+Result transfers are previewed and sized against the receiving machine's guarded
+temporary space, including both the archive and verified extraction; they have no
+fixed 256 MiB cap on updated workers. Select only useful outputs to keep the Mac light.
 Portable work can use either architecture; pin `--arch aarch64` or `--arch x86_64`
 when its dependencies or outputs require one.
 

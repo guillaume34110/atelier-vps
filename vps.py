@@ -15,7 +15,7 @@ import sys
 import tarfile
 import tempfile
 
-from worker import FETCH_LIMIT, GIB, INPUT_LIMIT, safe_path
+from worker import GIB, safe_path
 from telemetry import public_label
 import client_config
 import projects
@@ -74,7 +74,7 @@ def managed_worktree(project, home):
     return False
 
 
-def inputs(project):
+def inputs(project, disk_bytes=None):
     project=project.resolve()
     home=Path.home().resolve()
     private=[(home/name).resolve() for name in ['.ssh','.config','.claude','.agents']]
@@ -107,8 +107,8 @@ def inputs(project):
             if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
                 raise ValueError('source contains a hard-linked or non-regular file')
             total += info.st_size
-            if total > INPUT_LIMIT:
-                raise ValueError("input exceeds 64 MiB; select a smaller source directory")
+            if disk_bytes is not None and total > disk_bytes:
+                raise ValueError("source exceeds the declared task disk budget")
             yield file, str(file.relative_to(project))
 
 
@@ -158,7 +158,7 @@ def transport(host, operation, request=None, payload=None, output=None, source=N
             if source is not None or operation == 'run':
                 with tarfile.open(fileobj=proc.stdin, mode='w|') as archive:
                     if source is not None:
-                        for file, name in inputs(source):
+                        for file, name in inputs(source, request['disk_bytes']):
                             archive.add(file, arcname=name, recursive=False)
             proc.stdin.close()
         except BrokenPipeError:
@@ -306,6 +306,9 @@ def select_server(request, server=None, arch='any'):
         if not state.get('admit') or state.get('maintenance'):
             diagnostics.append({'server':row['id'],'reason':'not_admitting'})
             continue
+        if request.get('source_bytes', 0) > 64 * 1024 ** 2 and not state.get('capabilities', {}).get('transfer_budgets'):
+            diagnostics.append({'server':row['id'], 'reason':'update_worker_for_budgeted_transfers'})
+            continue
         if (request.get('project_create') or request.get('project_from')) and not state.get('capabilities', {}).get('project_sources'):
             diagnostics.append({'server':row['id'],'reason':'project_sources_unavailable'})
             continue
@@ -342,6 +345,8 @@ def select_server(request, server=None, arch='any'):
 
 
 def run_on_server(request, source, server=None, arch='any'):
+    if source is not None:
+        request = {**request, 'source_bytes': sum(file.stat().st_size for file, _ in inputs(source, request['disk_bytes']))}
     selected = select_server(request, server, arch)
     # Persist an explicit environment override before handing out a stable job reference.
     previous=next((row for row in client_config.connections() if row['id']==selected['id']),None)
@@ -395,9 +400,9 @@ def prepare_project(source, name, disk_gib, cpus=1, ram_gib=None, timeout=1800, 
     if not directory.is_dir():
         raise ValueError('an existing project directory is required')
     name = projects.identifier(name)
-    digest, _ = projects.fingerprint(inputs(directory), root=directory)
     if not all(math.isfinite(x) and x > 0 for x in (disk_gib, ram_gib) if x is not None):
         raise ValueError('finite, positive disk and RAM reservations are required')
+    digest, _ = projects.fingerprint(inputs(directory, math.ceil(disk_gib * GIB)), root=directory)
     request = {'argv':['true'], 'agent':public_label('Projet ' + name, 'Projet'), 'project':name,
                'project_create':{'id':name, 'revision':digest}, 'timeout':timeout, 'cpus':cpus,
                'disk_bytes':math.ceil(disk_gib * GIB),
@@ -482,7 +487,23 @@ def admin_request(action, server=None, **request):
     return result
 
 
-def unpack_result(archive, destination):
+def fetch_plan(host, ident, paths):
+    state = json_request(host, 'status', timeout=15)[1]
+    if not state.get('capabilities', {}).get('transfer_budgets'):
+        # Installed older workers cannot preview; preserve their existing protocol.
+        return {'bytes': 256 * 1024 ** 2, 'archive_bytes': 280 * 1024 ** 2,
+                'disk_bytes': math.ceil(0.6 * GIB)}
+    rc, value = json_request(host, 'fetch', {'id': ident, 'paths': paths, 'preview': True})
+    if (rc or value.get('ok') is not True
+            or any(type(value.get(key)) is not int or value[key] < 0
+                   for key in ('bytes', 'archive_bytes', 'disk_bytes'))
+            or value['archive_bytes'] < value['bytes']
+            or value['disk_bytes'] < value['archive_bytes'] + value['bytes']):
+        raise ValueError('invalid result transfer budget; preserve the remote task')
+    return value
+
+
+def unpack_result(archive, destination, max_bytes=256 * 1024 ** 2):
     if destination.exists():
         raise ValueError("result destination already exists")
     destination.mkdir()
@@ -495,15 +516,15 @@ def unpack_result(archive, destination):
                 rel = safe_path(member.name)
                 if not member.isfile() or member.size < 0:
                     raise ValueError("invalid result member")
-                total += member.size
-                if total > FETCH_LIMIT + 4 * 1024 ** 2:
-                    raise ValueError("result exceeds transfer limit")
                 source = tar.extractfile(member)
                 if member.name == "manifest.json":
                     if manifest is not None or member.size > 4 * 1024 ** 2:
                         raise ValueError("invalid manifest")
                     manifest = json.load(source)
                 else:
+                    total += member.size
+                    if total > max_bytes or len(extracted) >= 10000:
+                        raise ValueError("result exceeds the receiving disk budget")
                     target = destination.joinpath(*rel.parts)
                     target.parent.mkdir(parents=True, exist_ok=True)
                     digest = hashlib.sha256()
@@ -678,7 +699,7 @@ def main():
         if not argv or not args.source.is_dir():
             raise ValueError('source directory and command are required')
         # Validate the complete manifest before SSH; stream it without a local copy.
-        list(inputs(args.source.resolve()))
+        list(inputs(args.source.resolve(), math.ceil(args.disk_gib * GIB)))
         request = {'argv': argv, 'timeout': args.timeout,
                              'agent': public_label(args.agent, 'Agent non identifié'),
                              'project': public_label(args.source.resolve().name, 'Projet non identifié'),
@@ -696,15 +717,22 @@ def main():
         return rc
     root = temp_root()
     profile, ident=job_target(args.id,args.server) if not args.host else ({'id':'legacy','ssh_host':args.host},args.id)
+    budget = fetch_plan(profile['ssh_host'], ident, args.paths)
+    free = shutil.disk_usage(root)
+    if free.free < max(free.total // 10, GIB) + budget['disk_bytes']:
+        raise RuntimeError('insufficient local disk reserve; preserve the remote task')
     with tempfile.TemporaryDirectory(prefix="vps-transfer-", dir=root) as staging:
         staging = Path(staging)
         archive = staging / "result.tar"
         with archive.open("wb") as out:
-            rc, _ = transport(profile['ssh_host'], "fetch", {"id": ident, "paths": args.paths}, output=out,timeout=120)
+            rc, _ = transport(profile['ssh_host'], "fetch", {"id": ident, "paths": args.paths, 'max_bytes': budget['bytes']},
+                              output=out, timeout=min(3600, max(120, math.ceil(budget['archive_bytes'] / 1024 ** 2) + 60)))
         if rc:
             raise RuntimeError("fetch failed; task remains on server")
+        if archive.stat().st_size > budget['archive_bytes']:
+            raise ValueError('result archive exceeds its announced disk budget')
         destination = root / ("vps-result-" + profile['id'] + '-' + ident)
-        count = unpack_result(archive, destination)
+        count = unpack_result(archive, destination, budget['bytes'])
         print(json.dumps({"verified_files": count, "directory": str(destination), "released": False}))
     return 0
 

@@ -1,5 +1,6 @@
 """The complete CI suite, including a real running container and file round trip."""
 import io
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -56,6 +57,53 @@ def payload(argv, files=None, *, include_default=True, **options):
             entry.size = len(content)
             tar.addfile(entry, io.BytesIO(content))
     return out.getvalue()
+
+
+def verify_budgeted_transfers(container, root, evidence):
+    with tempfile.TemporaryDirectory(dir=root) as fixture:
+        fixture = Path(fixture)
+        source = fixture / 'source.bin'
+        with source.open('wb') as out:
+            out.truncate(65 * 1024 ** 2)
+        request = {'argv': ['python3', '-c',
+                    "from pathlib import Path; assert Path('source.bin').stat().st_size==65*1024**2; "
+                    "f=Path('result.bin').open('wb'); chunk=bytes(1024**2); "
+                    "[f.write(chunk) for _ in range(257)]; f.close()"],
+                   'disk_bytes': 512 * 1024 ** 2, 'ram_bytes': 512 * 1024 ** 2,
+                   'cpus': 1, 'timeout': 120, 'agent': 'CI · grands transferts'}
+        incoming = fixture / 'input.tar.gz'
+        with incoming.open('wb') as out:
+            out.write(json.dumps(request).encode() + b'\n')
+            with tarfile.open(fileobj=out, mode='w|gz') as tar:
+                tar.add(source, arcname='source.bin')
+        with incoming.open('rb') as src:
+            result = subprocess.run(['docker', 'exec', '-i', '--user', '10001:10001', container,
+                                     *WORKER_EXEC, 'run'], stdin=src, capture_output=True, timeout=180)
+        assert result.returncode == 0, result.stderr[-2000:]
+        task = json.loads(result.stdout)
+        assert task['status'] == 'passed', task
+        request = {'id': task['id'], 'paths': ['work/result.bin', 'receipt.json']}
+        plan = json.loads(execute(container, 'fetch', json.dumps({**request, 'preview': True}).encode() + b'\n'))
+        assert plan['bytes'] > 256 * 1024 ** 2 and plan['disk_bytes'] > 2 * plan['bytes'], plan
+        execute(container, 'fetch', json.dumps({**request, 'max_bytes': 256 * 1024 ** 2}).encode() + b'\n', success=False)
+        archive = fixture / 'result.tar'
+        with archive.open('wb') as out:
+            result = subprocess.run(['docker', 'exec', '-i', '--user', '10001:10001', container,
+                                     *WORKER_EXEC, 'fetch'], input=json.dumps({**request, 'max_bytes': plan['bytes']}).encode() + b'\n',
+                                    stdout=out, stderr=subprocess.PIPE, timeout=180)
+        assert result.returncode == 0 and archive.stat().st_size <= plan['archive_bytes'], result.stderr[-2000:]
+        target = fixture / 'verified'
+        assert vps.unpack_result(archive, target, plan['bytes']) == 2
+        expected = hashlib.sha256()
+        for _ in range(257):
+            expected.update(bytes(1024 ** 2))
+        with (target / 'work/result.bin').open('rb') as data:
+            actual = hashlib.file_digest(data, 'sha256').hexdigest()
+        assert actual == expected.hexdigest()
+        (evidence / 'budgeted-transfer.json').write_text(json.dumps({'job': task['id'], 'source_bytes': 65 * 1024 ** 2,
+            'result_bytes': 257 * 1024 ** 2, 'sha256': actual, 'plan': plan, 'verified': True}))
+        execute(container, 'release', json.dumps({'id': task['id']}).encode() + b'\n')
+    print('Source >64 MiB + result >256 MiB with disk budgets and verified SHA256: passed', flush=True)
 
 
 def ssh_frontends(parent):
@@ -275,6 +323,7 @@ def main():
         (evidence / 'transfer-proof.json').write_text(json.dumps(transfers))
         print("Running service + input/process/result SHA256 round trip: passed", flush=True)
         execute(name, "release", json.dumps({"id": task["id"]}).encode() + b"\n")
+        verify_budgeted_transfers(name, root, evidence)
         with tempfile.TemporaryDirectory(dir=root) as fixture:
             source = Path(fixture); (source / 'input.txt').write_text('21\n')
             (source / 'src').mkdir(); (source / 'src/app.py').write_text('original\n')

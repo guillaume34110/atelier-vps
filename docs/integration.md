@@ -64,7 +64,7 @@ copy inside each new reserved job, without transferring the project again. Pass
 the local `source` path when available: changed files reject the old revision,
 and preparing again creates a new version without overwriting the old one.
 Concurrent tasks operate on separate copies; retrieve their results with `vps_fetch`.
-Sources are limited to the normal 64 MiB filter, count against the worker quota,
+Filtered sources use the declared task disk budget, count against the worker quota,
 and are never automatically removed. A project reference belongs to one
 developer and one server; another team member prepares their own copy.
 
@@ -79,7 +79,11 @@ cookies or credentials to the worker or put them in job arguments or logs.
 
 Fetch creates `output/task-tmp` in the supplied project. With the canonical
 `~/.local/bin/workspace-budget.py` helper, MCP uses that guard with a 0.6 GiB
-transfer allowance. Otherwise it requires a new task directory and a 10% disk
+transfer allowance on legacy workers. Updated workers preview the selected files;
+MCP reserves the measured archive and extraction peak instead of a fixed transfer
+ceiling. Sources use the declared remote disk budget, with checks throughout
+reception. Older workers are excluded before submission for sources over 64 MiB.
+Otherwise fetching requires a new task directory and a 10% disk
 reserve, at least 1 GiB, plus transfer headroom. Stricter local policy applies.
 Existing workspaces are never overwritten.
 

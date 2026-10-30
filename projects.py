@@ -7,9 +7,6 @@ from pathlib import Path, PurePosixPath
 import re
 import stat
 
-LIMIT = 64 * 1024 ** 2
-
-
 def identifier(value):
     if not isinstance(value, str) or not re.fullmatch('[a-z][a-z0-9-]{0,31}', value):
         raise ValueError('invalid project identifier')
@@ -36,7 +33,6 @@ def open_relative(root, name):
 
 def fingerprint(files, check=None, root=None):
     entries = []
-    total = 0
     since_check = 0
     for file, name in sorted(files, key=lambda item: item[1]):
         rel = PurePosixPath(name)
@@ -57,8 +53,8 @@ def fingerprint(files, check=None, root=None):
             info = os.fstat(source.fileno())
             if not stat.S_ISREG(info.st_mode):
                 raise ValueError('project sources must be regular files')
-            if len(entries) >= 10000 or total + info.st_size > LIMIT:
-                raise ValueError('project source exceeds transfer limits')
+            if len(entries) >= 10000:
+                raise ValueError('project source file count limit')
             digest = hashlib.sha256()
             while chunk := source.read(4 * 1024 ** 2):
                 digest.update(chunk)
@@ -67,7 +63,6 @@ def fingerprint(files, check=None, root=None):
                     check(); since_check = 0
         entries.append({'path': name, 'bytes': info.st_size, 'sha256': digest.hexdigest(),
                         'executable': bool(info.st_mode & 0o111)})
-        total += info.st_size
     raw = json.dumps(entries, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode()
     if len(raw) > 2 * 1024 ** 2:
         raise ValueError('project manifest exceeds its limit')

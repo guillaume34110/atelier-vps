@@ -60,9 +60,40 @@ class ArchiveTests(unittest.TestCase):
                 worker.extract(archive([("src/main.py", b"replace", tarfile.REGTYPE)]), root)
 
     def test_input_limit(self):
-        with tempfile.TemporaryDirectory() as tmp, patch.object(worker, "INPUT_LIMIT", 3):
+        with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaises(ValueError):
-                worker.extract(archive([("large", b"1234", tarfile.REGTYPE)]), Path(tmp))
+                worker.extract(archive([("large", b"1234", tarfile.REGTYPE)]), Path(tmp), disk_bytes=3)
+            self.assertFalse((Path(tmp) / 'large').exists())
+
+    def test_source_size_uses_the_declared_disk_budget(self):
+        import projects
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            file = root / 'source.bin'
+            with file.open('wb') as out:
+                out.truncate(65 * worker.MIB)
+            self.assertEqual([name for _, name in vps.inputs(root, 66 * worker.MIB)], ['source.bin'])
+            _, entries = projects.fingerprint(vps.inputs(root, 66 * worker.MIB), root=root)
+            self.assertEqual(entries[0]['bytes'], file.stat().st_size)
+            with self.assertRaisesRegex(ValueError, 'declared task disk budget'):
+                list(vps.inputs(root, 64 * worker.MIB))
+
+    def test_large_results_are_previewed_before_the_receiving_budget_is_checked(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(worker, 'ROOT', Path(tmp)):
+            job = Path(tmp) / 'jobs' / ('a' * 32)
+            job.mkdir(parents=True)
+            (job / 'receipt.json').write_text('{"status":"passed"}')
+            with (job / 'result.bin').open('wb') as out:
+                out.truncate(257 * worker.MIB)
+            request = {'id': 'a' * 32, 'paths': ['result.bin']}
+            preview = io.BytesIO()
+            worker.fetch({**request, 'preview': True}, preview)
+            plan = json.loads(preview.getvalue())
+            self.assertEqual(plan['bytes'], 257 * worker.MIB)
+            self.assertGreater(plan['disk_bytes'], 2 * plan['bytes'])
+            with self.assertRaisesRegex(ValueError, 'receiving disk budget'):
+                worker.fetch({**request, 'max_bytes': plan['bytes'] - 1}, io.BytesIO())
+            self.assertTrue((job / 'result.bin').exists())
 
     def test_source_filters_secrets_and_dependencies(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -87,6 +118,25 @@ class ArchiveTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 vps.unpack_result(file, root / "download")
             self.assertFalse((root / "download").exists())
+
+    def test_result_cannot_exceed_its_announced_receiving_budget(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            data = archive([('result', b'data', tarfile.REGTYPE)])
+            file = root / 'result.tar'
+            file.write_bytes(data.read())
+            with self.assertRaisesRegex(ValueError, 'receiving disk budget'):
+                vps.unpack_result(file, root / 'download', max_bytes=3)
+            self.assertFalse((root / 'download').exists())
+
+    def test_result_preview_rejects_untrusted_budgets(self):
+        def response(host, action, request=None, **kwargs):
+            if action == 'status':
+                return 0, {'ok': True, 'capabilities': {'transfer_budgets': True}}
+            return 0, {'ok': True, 'bytes': 300, 'archive_bytes': 400, 'disk_bytes': 500}
+        with patch.object(vps, 'json_request', side_effect=response):
+            with self.assertRaisesRegex(ValueError, 'invalid result transfer budget'):
+                vps.fetch_plan('worker', 'a' * 32, ['work/result'])
 
     def test_fetch_round_trip(self):
         with tempfile.TemporaryDirectory() as tmp, patch.object(worker, "ROOT", Path(tmp)):

@@ -85,6 +85,14 @@ class Fleet(unittest.TestCase):
         self.assertEqual(len(plans),2)
         self.assertTrue(all(x[2]['ram_bytes'] is None and x[2]['disk_bytes']==vps.GIB for x in plans))
 
+    def test_large_sources_select_updated_workers_before_submission(self):
+        request = {**self.request, 'source_bytes': 65 * 1024 ** 2}
+        with self.assertRaisesRegex(RuntimeError, 'update_worker_for_budgeted_transfers'):
+            vps.select_server(request)
+        self.assertFalse(any(call[1] == 'run' for call in self.calls))
+        self.states['paris-worker']['capabilities']['transfer_budgets'] = True
+        self.assertEqual(vps.select_server(request)['id'], 'paris')
+
     def test_global_ram_cannot_be_combined_or_claims_shrunk(self):
         request={**self.request,'ram_bytes':4*vps.GIB}
         with self.assertRaises(RuntimeError):vps.select_server(request)

@@ -16,7 +16,7 @@ The initial guest provides Alpine Linux with musl, Python 3.14 and Node 24.
 It does not provide Ubuntu/glibc, x86, a browser, Android, native macOS tools or
 Metal. Install dependencies before transfer only when they are compatible with
 that guest; jobs requiring network access stay on a suitable VPS or machine.
-The filtered source limit is 64 MiB, results are limited to 256 MiB and logs to
+The private Mac protocol allows an 80 MiB source archive, results are limited to 256 MiB and logs to
 18 MiB. Include the source archive and returned files in the calling VPS task's
 disk reservation.
 
