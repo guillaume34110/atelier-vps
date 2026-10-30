@@ -30,8 +30,6 @@ from quota_protection import protect_quota
 GIB = 1024 ** 3
 MIB = 1024 ** 2
 ROOT = Path(os.environ.get("USEVPS_ROOT", "/workspace"))
-INPUT_LIMIT = 64 * MIB
-FETCH_LIMIT = 256 * MIB
 JOB_LIMIT = 32 * GIB
 TOTAL_LIMIT = 32 * GIB
 LOG_LIMIT = 20 * MIB
@@ -146,7 +144,7 @@ def status():
                  admit=not maintenance and resources.fits(pool, 1, 64 * MIB, MIB),
                  capabilities={'ram_profiles': True, 'quota_attributes_protected': True, 'failure_details': True,
                                'planning': True, 'desktop_sessions': True, 'job_wait': True, 'project_sources': True,
-                               'mac_worker': True},
+                               'mac_worker': True, 'transfer_budgets': True},
                  scope={'id': os.environ.get('USEVPS_TENANT', 'owner'),
                         'mode': os.environ.get('USEVPS_MODE', 'opportunistic')})
     return state
@@ -181,7 +179,7 @@ def public_status():
     return state
 
 
-def extract(stream, target, check=None):
+def extract(stream, target, check=None, disk_bytes=None):
     size, count = 0, 0
     since_check = 0
     with tarfile.open(fileobj=stream, mode="r|*") as archive:
@@ -195,8 +193,8 @@ def extract(stream, target, check=None):
                 dest.mkdir(parents=True, exist_ok=True)
             elif member.isfile():
                 size += member.size
-                if size > INPUT_LIMIT:
-                    raise ValueError("input exceeds 64 MiB")
+                if disk_bytes is not None and size > disk_bytes:
+                    raise ValueError("source exceeds the declared task disk budget")
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 with archive.extractfile(member) as src, dest.open("xb") as out:
                     while chunk := src.read(64 * 1024):
@@ -382,6 +380,8 @@ def _run_job(request, stream, *, ident=None, persistent=None, profile_ready=None
                   "reservation": {k: lease.value[k] for k in ('cpus', 'ram_bytes', 'disk_bytes', 'ram_source')}}
         receipt(path, result)
         def check_input():
+            if time.time() - result['started'] > timeout:
+                raise RuntimeError('input transfer timeout')
             state = capacity()
             growth = usage(path) + (max(0, usage(persistent) - persistent_start) if persistent else 0)
             lease.update(process_memory({os.getpid()}), growth, {os.getpid()}, usage(cache))
@@ -392,11 +392,9 @@ def _run_job(request, stream, *, ident=None, persistent=None, profile_ready=None
             if state['host_available_ram'] < reserve_ram:
                 raise RuntimeError('host memory pressure')
         try:
-            managed = request.get('project_create') or request.get('project_from')
-            if managed:
-                check_input()
+            check_input()
             with Transfer(ROOT, stream, 'upload', ident, agent, project) as transfer:
-                extract(transfer, work, check_input if managed else None)
+                extract(transfer, work, check_input, peak)
             if request.get('project_from'):
                 value = request['project_from']
                 projects.materialize(ROOT, value['id'], value['revision'], work, peak, check_input)
@@ -564,6 +562,11 @@ def fetch(request, stream):
         raise ValueError('fetch failure details separately from job files')
     if request.get('paths') == ['diagnostic.json']:
         report = diagnostics.get(ROOT, path)
+        if request.get('preview'):
+            size = len(diagnostics.bundle(report))
+            stream.write(json.dumps({'ok': True, 'files': 1, 'bytes': size,
+                                     'archive_bytes': size, 'disk_bytes': 2 * size + MIB}).encode())
+            return
         with Transfer(ROOT, stream, 'download', path.name, report['agent'], report['project']) as transfer:
             transfer.write(diagnostics.bundle(report))
         return
@@ -585,8 +588,18 @@ def fetch(request, stream):
                 name = str(file.relative_to(path))
                 safe_path(name)
                 files[name] = file
-    if not files or len(files) > 10000 or sum(p.stat().st_size for p in files.values()) > FETCH_LIMIT:
-        raise ValueError("result must contain 1..10000 files and <= 256 MiB")
+    if not files or len(files) > 10000:
+        raise ValueError("result must contain 1..10000 files")
+    total = sum(p.stat().st_size for p in files.values())
+    limit = request.get('max_bytes')
+    if limit is not None and (type(limit) is not int or limit < 0 or total > limit):
+        raise ValueError('result exceeds the receiving disk budget')
+    if request.get('preview'):
+        # Include PAX headers, block padding and the bounded checksum manifest.
+        archive_bytes = total + len(files) * 32768 + 5 * MIB
+        stream.write(json.dumps({'ok': True, 'files': len(files), 'bytes': total,
+                                 'archive_bytes': archive_bytes, 'disk_bytes': archive_bytes + total + MIB}).encode())
+        return
     manifest = {}
     for name, file in files.items():
         with file.open("rb") as source:

@@ -112,7 +112,7 @@ def vps_run(source: str, argv: list[str], agent: str, disk_gib: float,
         raise ValueError('an existing source directory and a nonempty argument array are required')
     if not all(math.isfinite(x) and x > 0 for x in (disk_gib, ram_gib) if x is not None):
         raise ValueError('finite, positive disk and RAM reservations are required')
-    list(vps.inputs(directory))
+    list(vps.inputs(directory, math.ceil(disk_gib * vps.GIB)))
     return vps.run_on_server({'argv': argv, 'agent': public_label(agent, 'Agent'),
                            'project': public_label(directory.name, 'Project'), 'timeout': timeout,
                            'disk_bytes': math.ceil(disk_gib * vps.GIB),
@@ -161,7 +161,7 @@ def vps_wait(job_id: str, timeout: int = 3600, server: str | None = None) -> dic
 
 @server.tool(structured_output=True)
 def vps_fetch(job_id: str, paths: list[str], project: str, server: str | None = None) -> dict[str, Any]:
-    """Fetch <=256 MiB with SHA256 verification into the local project's task workspace.
+    """Fetch selected results with SHA256 verification and an automatic local disk budget.
 
     Preserve useful files outside task-tmp before cleanup. Never overwrite an
     existing task workspace; inspect and finish that prior pass first.
@@ -170,14 +170,17 @@ def vps_fetch(job_id: str, paths: list[str], project: str, server: str | None = 
     directory = Path(project).expanduser().resolve()
     if not directory.is_dir():
         raise ValueError('project directory must exist')
+    budget = vps.fetch_plan(profile['ssh_host'], ident, paths)
+    temp_gib = max(0.025, math.ceil(budget['disk_bytes'] / 1024 ** 2) / 1024)
+    wait = min(3700, max(120, math.ceil(budget['archive_bytes'] / 1024 ** 2) + 120))
     helper = Path.home() / '.local/bin/workspace-budget.py'
     args = [sys.executable, str(ROOT / 'vps.py'), '--server', profile['id'], 'fetch', profile['id']+':'+ident, *paths]
     env = os.environ.copy()
     if helper.is_file():
-        command = [sys.executable, str(helper), '--temp-gib', '0.6', 'run', str(directory), '--', *args]
+        command = [sys.executable, str(helper), '--temp-gib', str(temp_gib), 'run', str(directory), '--', *args]
         if shutil.which('rtk'):
             command = ['rtk', 'proxy', *command]
-        completed = subprocess.run(command, capture_output=True, text=True, timeout=120)
+        completed = subprocess.run(command, capture_output=True, text=True, timeout=wait)
         log = directory / 'output/task-tmp/stdout.log'
         if completed.returncode:
             raise RuntimeError('bounded fetch failed; inspect the preserved task workspace')
@@ -185,11 +188,11 @@ def vps_fetch(job_id: str, paths: list[str], project: str, server: str | None = 
         return next(json.loads(line) for line in reversed(lines) if line.startswith('{"verified_files"'))
     target = directory / 'output/task-tmp'
     free = shutil.disk_usage(directory)
-    if free.free < max(free.total // 10, vps.GIB) + int(0.6 * vps.GIB):
+    if free.free < max(free.total // 10, vps.GIB) + math.ceil(temp_gib * vps.GIB):
         raise RuntimeError('insufficient local disk reserve for a verified transfer')
     target.mkdir(parents=True, exist_ok=False)
     env['TASK_WORKSPACE'] = str(target)
-    result = subprocess.run(args, env=env, capture_output=True, text=True, timeout=120)
+    result = subprocess.run(args, env=env, capture_output=True, text=True, timeout=wait)
     if result.returncode:
         raise RuntimeError(result.stderr[-2000:])
     return json.loads(result.stdout)
