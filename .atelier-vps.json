@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "id": "atelier-vps",
+  "recipes": {
+    "test": {
+      "setup": [["uv", "sync", "--frozen", "--no-dev"]],
+      "argv": ["uv", "run", "--no-sync", "python", "-m", "unittest", "discover", "-s", "tests"]
+    },
+    "widget-build": {
+      "platform": "local",
+      "argv": ["python3", "macos/build.py"]
+    }
+  }
+}

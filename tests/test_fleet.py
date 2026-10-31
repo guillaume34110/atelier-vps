@@ -42,6 +42,8 @@ class Fleet(unittest.TestCase):
             allowed=(request['cpus']<=pool['cpu_available'] and ram<=pool['ram_available'] and request['disk_bytes']<=pool['disk_available'])
             result={'ok':True,'scope':value['scope'],'admission':{'allowed':allowed},
                     'requested':{'cpus':request['cpus'],'ram_bytes':ram,'disk_bytes':request['disk_bytes'],'ram_source':'unprofiled'}}
+            if request.get('project_task'):
+                result['project'] = {'present': value.get('project_present', False)}
         elif operation=='run':
             if request.get('project_create'):
                 return 0,json.dumps({'id':'d'*32,'status':'passed','managed_project':request['project_create']}).encode()
@@ -84,6 +86,17 @@ class Fleet(unittest.TestCase):
         plans=[x for x in self.calls if x[1]=='plan']
         self.assertEqual(len(plans),2)
         self.assertTrue(all(x[2]['ram_bytes'] is None and x[2]['disk_bytes']==vps.GIB for x in plans))
+
+    def test_project_recipes_require_updated_workers_and_prefer_existing_sources(self):
+        request = {**self.request, 'recipe_run': True,
+                   'project_task': {'id': 'demo', 'revision': 'f' * 64, 'upload': False}}
+        with self.assertRaisesRegex(RuntimeError, 'update_worker_for_project_recipes'):
+            vps.select_server(request)
+        for value in self.states.values():
+            value['capabilities']['project_recipes'] = True
+            value['capabilities']['project_sources'] = True
+        self.states['paris-worker']['project_present'] = True
+        self.assertEqual(vps.select_server(request)['id'], 'paris')
 
     def test_large_sources_select_updated_workers_before_submission(self):
         request = {**self.request, 'source_bytes': 65 * 1024 ** 2}

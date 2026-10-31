@@ -39,6 +39,19 @@ python3 scripts/install.py --host dev-vps
 atelier-vps status
 ```
 
+For recurring checks, [project recipes](docs/recipes.md) select a compatible VPS
+and reuse verified project sources and private dependency caches automatically:
+
+```sh
+atelier-vps task test --source ./my-project --disk-gib 2 --agent "Tests · API"
+# Inspect the route without executing:
+atelier-vps task test --source ./my-project --disk-gib 2 --plan
+```
+
+Use the `vps_task` MCP tool for the same workflow. Explicit macOS/Metal/device
+recipes stay on their required machine; compatible recipes have no silent local
+fallback. E2E recipes start and verify their API/services on the VPS too.
+
 The macOS/Linux client needs Python 3.10+ and OpenSSH. Install [uv](https://docs.astral.sh/uv/)
 for the pinned MCP dependency. With a working Codex CLI, the installer registers
 `atelier-vps`, sets its tool timeout and installs the VPS-first routing skill.

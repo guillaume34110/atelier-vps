@@ -306,10 +306,13 @@ def select_server(request, server=None, arch='any'):
         if not state.get('admit') or state.get('maintenance'):
             diagnostics.append({'server':row['id'],'reason':'not_admitting'})
             continue
+        if request.get('recipe_run') and not state.get('capabilities', {}).get('project_recipes'):
+            diagnostics.append({'server':row['id'], 'reason':'update_worker_for_project_recipes'})
+            continue
         if request.get('source_bytes', 0) > 64 * 1024 ** 2 and not state.get('capabilities', {}).get('transfer_budgets'):
             diagnostics.append({'server':row['id'], 'reason':'update_worker_for_budgeted_transfers'})
             continue
-        if (request.get('project_create') or request.get('project_from')) and not state.get('capabilities', {}).get('project_sources'):
+        if (request.get('project_create') or request.get('project_from') or request.get('project_task')) and not state.get('capabilities', {}).get('project_sources'):
             diagnostics.append({'server':row['id'],'reason':'project_sources_unavailable'})
             continue
         needed = dict(request)
@@ -339,7 +342,8 @@ def select_server(request, server=None, arch='any'):
         candidates.append(row)
     if not candidates:
         raise RuntimeError('No compatible server can admit the full reservation: ' + json.dumps(diagnostics, separators=(',',':')))
-    selected = min(candidates, key=lambda row:(row['state']['pool'].get('active_count',0),
+    selected = min(candidates, key=lambda row:(not row.get('plan', {}).get('project', {}).get('present', False),
+                    row['state']['pool'].get('active_count',0),
                     -row['state']['pool'].get('cpu_available',0), -row['state']['pool'].get('ram_available',0)))
     return selected
 
@@ -348,6 +352,10 @@ def run_on_server(request, source, server=None, arch='any'):
     if source is not None:
         request = {**request, 'source_bytes': sum(file.stat().st_size for file, _ in inputs(source, request['disk_bytes']))}
     selected = select_server(request, server, arch)
+    return run_selected(selected, source)
+
+
+def run_selected(selected, source):
     # Persist an explicit environment override before handing out a stable job reference.
     previous=next((row for row in client_config.connections() if row['id']==selected['id']),None)
     profile=dict(previous) if previous else {k:selected[k] for k in ['id','name','team','ssh_host','enabled','managed']}
@@ -584,6 +592,16 @@ def main():
     run.add_argument("--ram-gib", default='auto', help="auto learns measured peaks with headroom; or explicit GiB")
     run.add_argument('--arch', choices=['aarch64','x86_64','any'], default='any')
     run.add_argument("argv", nargs=argparse.REMAINDER)
+    task = commands.add_parser('task', help='route a named recipe and reuse its private VPS project environment')
+    task.add_argument('recipe')
+    task.add_argument('--source', type=Path, default=Path('.'))
+    task.add_argument('--disk-gib', type=float, required=True)
+    task.add_argument('--cpus', type=int, default=1)
+    task.add_argument('--ram-gib', default='auto')
+    task.add_argument('--timeout', type=int, default=900)
+    task.add_argument('--agent', default=os.environ.get('USEVPS_AGENT', 'Recette'))
+    task.add_argument('--arch', choices=['any', 'aarch64', 'x86_64'], default='any')
+    task.add_argument('--plan', action='store_true')
     prepare = commands.add_parser('project-prepare', help='store a versioned project source on the VPS')
     prepare.add_argument('--source', type=Path, required=True)
     prepare.add_argument('--id', required=True)
@@ -611,6 +629,15 @@ def main():
     release.add_argument("id")
     release.add_argument("--confirmed", action="store_true", required=True)
     args = parser.parse_args()
+    if args.action == 'task':
+        if args.host:
+            raise ValueError('recipes require a registered server connection')
+        import project_tasks
+        rc, result = project_tasks.execute(args.source, args.recipe, args.agent, args.disk_gib,
+            args.cpus, None if args.ram_gib == 'auto' else float(args.ram_gib), args.timeout,
+            args.server, args.arch, args.plan)
+        print(json.dumps(result, ensure_ascii=False))
+        return rc
     if args.host and args.server:
         parser.error('choose --host or --server')
     if args.action == 'desktop':

@@ -6,6 +6,8 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import stat
+import fcntl
+import time
 
 def identifier(value):
     if not isinstance(value, str) or not re.fullmatch('[a-z][a-z0-9-]{0,31}', value):
@@ -147,6 +149,63 @@ def store(root, project, expected, work, job_id, check=None):
     work.mkdir()
     verify(root, project, expected, check)
     return {'id': project, 'revision': expected, 'bytes': sum(x['bytes'] for x in entries), 'created': True}
+
+
+def describe(root, project, expected):
+    identifier(project); revision(expected)
+    path = Path(root) / '.atelier-managed-projects' / project
+    missing = {'id': project, 'revision': expected, 'present': False}
+    if not path.exists() and not path.is_symlink():
+        return missing
+    target = directory(root, project) / 'versions' / expected
+    if not target.exists() and not target.is_symlink():
+        return missing
+    meta, source = target / 'manifest.json', target / 'source'
+    if (target.is_symlink() or source.is_symlink() or not source.is_dir()
+            or meta.is_symlink() or not meta.is_file() or meta.stat().st_nlink != 1
+            or meta.stat().st_size > 2 * 1024 ** 2):
+        raise ValueError('unsafe project version')
+    with os.fdopen(open_relative(target, 'manifest.json'), 'rb') as file:
+        info = os.fstat(file.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            raise ValueError('unsafe project manifest')
+        raw = file.read(2 * 1024 ** 2 + 1)
+    if len(raw) > 2 * 1024 ** 2:
+        raise ValueError('project manifest exceeds its limit')
+    entries = json.loads(raw)
+    raw = json.dumps(entries, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode()
+    if (not isinstance(entries, list) or len(entries) > 10000
+            or hashlib.sha256(raw).hexdigest() != expected
+            or any(not isinstance(x, dict) or type(x.get('bytes')) is not int or x['bytes'] < 0 for x in entries)):
+        raise ValueError('invalid project manifest')
+    # Execution still verifies the actual source bytes before using this version.
+    return {'id': project, 'revision': expected, 'present': True, 'bytes': sum(x['bytes'] for x in entries)}
+
+
+def ensure_work(root, value, work, job_id, peak, check):
+    project, expected = value['id'], value['revision']
+    if not value['upload']:
+        if any(work.iterdir()):
+            raise ValueError('a reused project cannot include another source archive')
+        materialize(root, project, expected, work, peak, check)
+        return {**describe(root, project, expected), 'created': False}
+    target = directory(root, project, create=True)
+    fd = os.open(target / '.prepare.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, 'a') as lock:
+        info = os.fstat(lock.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            raise ValueError('invalid project preparation lock')
+        while True:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                check(); time.sleep(0.1)
+        saved = store(root, project, expected, work, job_id, check)
+    if saved['created']:
+        materialize(root, project, expected, work, peak, check)
+    check()
+    return saved
 
 
 def materialize(root, project, expected, work, peak, check):
