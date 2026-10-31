@@ -148,6 +148,26 @@ def vps_project_run(project_ref: str, argv: list[str], agent: str, disk_gib: flo
 
 
 @server.tool(structured_output=True)
+def vps_task(source: str, recipe: str, agent: str, disk_gib: float,
+             cpus: int = 1, ram_gib: float | None = None, timeout: int = 900,
+             server: str | None = None, arch: str = 'any', plan_only: bool = False) -> dict[str, Any]:
+    """Run a project recipe on an admissible VPS, automatically reusing versioned sources.
+
+    Prefer this for recurring tests/builds/lint/E2E. Discover standard locked
+    Node/Python recipes or read .atelier-vps.json; plan_only inspects without
+    running a task. Explicit local requirements return local_required without
+    executing on the Mac. There is no silent local fallback or executed retry.
+    Reserve the full disk/RAM peak, including a first snapshot and its task copy.
+    Setup uses private dependency caches; recipe services must become ready and
+    are stopped with this recipe only. Fetch and preserve suggested result paths
+    before releasing the returned job_ref, including a failed task's evidence.
+    """
+    import project_tasks
+    return project_tasks.execute(source, recipe, agent, disk_gib, cpus, ram_gib,
+                                 timeout, server, arch, plan_only)[1]
+
+
+@server.tool(structured_output=True)
 def vps_wait(job_id: str, timeout: int = 3600, server: str | None = None) -> dict[str, Any]:
     """Wait on the VPS for an existing job's final state, without repeated model polling.
 

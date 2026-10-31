@@ -144,7 +144,7 @@ def status():
                  admit=not maintenance and resources.fits(pool, 1, 64 * MIB, MIB),
                  capabilities={'ram_profiles': True, 'quota_attributes_protected': True, 'failure_details': True,
                                'planning': True, 'desktop_sessions': True, 'job_wait': True, 'project_sources': True,
-                               'mac_worker': True, 'transfer_budgets': True},
+                               'mac_worker': True, 'transfer_budgets': True, 'project_recipes': True},
                  scope={'id': os.environ.get('USEVPS_TENANT', 'owner'),
                         'mode': os.environ.get('USEVPS_MODE', 'opportunistic')})
     return state
@@ -321,28 +321,43 @@ def validate_job_request(request):
 
 def plan(request):
     validate_job_request(request)
+    validate_project_request(request)
     needed = resources.requested(ROOT, request)
     state = public_status()
     admission = resources.admission(state['pool'], needed['cpus'], needed['ram_bytes'], needed['disk_bytes'], state['maintenance'])
-    return {'ok': state['ok'], 'scope': state['scope'], 'requested': needed, 'admission': admission}
+    result = {'ok': state['ok'], 'scope': state['scope'], 'requested': needed, 'admission': admission}
+    if request.get('project_task'):
+        value = request['project_task']
+        result['project'] = projects.describe(ROOT, value['id'], value['revision'])
+    return result
+
+
+def validate_project_request(request):
+    values = [request.get(key) for key in ('project_create', 'project_from', 'project_task')]
+    if sum(value is not None for value in values) > 1:
+        raise ValueError('choose one project preparation or execution mode')
+    for key, value in zip(('project_create', 'project_from', 'project_task'), values):
+        if value is None:
+            continue
+        keys = {'id', 'revision', 'upload'} if key == 'project_task' else {'id', 'revision'}
+        if not isinstance(value, dict) or set(value) != keys:
+            raise ValueError('invalid project reference')
+        projects.identifier(value['id']); projects.revision(value['revision'])
+        if key == 'project_task' and type(value['upload']) is not bool:
+            raise ValueError('invalid project upload mode')
 
 
 def run_job(request, stream, *, ident=None, persistent=None, profile_ready=None):
+    validate_project_request(request)
     create = request.get('project_create')
     use = request.get('project_from')
-    if create is not None and use is not None:
-        raise ValueError('choose project preparation or execution')
-    for value in (create, use):
-        if value is not None:
-            if not isinstance(value, dict) or set(value) != {'id', 'revision'}:
-                raise ValueError('invalid project reference')
-            projects.identifier(value['id']); projects.revision(value['revision'])
-    if use is not None and persistent is not None:
+    if (use is not None or request.get('project_task')) and persistent is not None:
         raise ValueError('project execution cannot use another persistent profile')
     if create is not None:
         if persistent is not None or request.get('argv') != ['true']:
             raise ValueError('project preparation cannot run another command')
-        directory = projects.directory(ROOT, create['id'], create=True)
+        with resources.resource_lock(ROOT):
+            directory = projects.directory(ROOT, create['id'], create=True)
         lock_path = directory / '.prepare.lock'
         fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
         with os.fdopen(fd, 'a') as lock:
@@ -362,6 +377,7 @@ def _run_job(request, stream, *, ident=None, persistent=None, profile_ready=None
     if not re.fullmatch('[a-f0-9]{32}', ident):
         raise ValueError('invalid internal job identity')
     with resources.reserve(ROOT, ident, request, capacity) as lease:
+        start = time.monotonic()
         with resources.resource_lock(ROOT):
             if not ensure_receipt_reserve():
                 raise RuntimeError("receipt headroom unavailable; retrieve and release completed jobs")
@@ -380,7 +396,7 @@ def _run_job(request, stream, *, ident=None, persistent=None, profile_ready=None
                   "reservation": {k: lease.value[k] for k in ('cpus', 'ram_bytes', 'disk_bytes', 'ram_source')}}
         receipt(path, result)
         def check_input():
-            if time.time() - result['started'] > timeout:
+            if time.monotonic() - start > timeout:
                 raise RuntimeError('input transfer timeout')
             state = capacity()
             growth = usage(path) + (max(0, usage(persistent) - persistent_start) if persistent else 0)
@@ -392,9 +408,18 @@ def _run_job(request, stream, *, ident=None, persistent=None, profile_ready=None
             if state['host_available_ram'] < reserve_ram:
                 raise RuntimeError('host memory pressure')
         try:
+            if request.get('project_task'):
+                value = request['project_task']
+                with resources.resource_lock(ROOT):
+                    persistent = projects.directory(ROOT, value['id'], create=True) / 'versions' / value['revision']
+                persistent_start = usage(persistent)
             check_input()
             with Transfer(ROOT, stream, 'upload', ident, agent, project) as transfer:
                 extract(transfer, work, check_input, peak)
+            if request.get('project_task'):
+                result['managed_project'] = projects.ensure_work(ROOT, request['project_task'], work, ident, peak, check_input)
+                if not result['managed_project']['created']:
+                    persistent_start = usage(persistent)
             if request.get('project_from'):
                 value = request['project_from']
                 projects.materialize(ROOT, value['id'], value['revision'], work, peak, check_input)
@@ -439,7 +464,6 @@ def _run_job(request, stream, *, ident=None, persistent=None, profile_ready=None
 
             reader = threading.Thread(target=capture, daemon=True)
             reader.start()
-            start = time.monotonic()
             reason = None
             def measure():
                 state = capacity()

@@ -16,6 +16,21 @@ tests, builds, lint, headless browser checks and processing to an admissible VPS
 by default. Split mixed workloads so macOS, devices, GPU and personal-account
 steps remain on the required machine. Do not move or interrupt a running task.
 
+For recurring project checks, prefer `vps_task(source, recipe, agent, disk_gib)`
+or `atelier-vps task RECIPE --source PROJECT --disk-gib PEAK`. Inspect an uncertain
+recipe with `plan_only=true`/`--plan`. Standard Node/Python checks are discovered;
+`.atelier-vps.json` defines additional commands, architecture and E2E services.
+The tool selects a VPS and reuses a verified source version automatically. Budget
+both the initial version and its isolated task copy; when that would not fit, it
+uses a temporary remote transfer. Setup uses existing private package caches.
+`local_required` is a platform constraint, not an executed command. `unconfigured`
+means define the recipe or use `vps_run` for a known one-off Linux command; do not
+fall back to local compute merely because a recipe is missing. No command is
+automatically retried after execution. Fetch/preserve `suggested_paths` before
+release, including failed recipe evidence. Service readiness must pass and each
+recipe cleans only its own services. If the host has not loaded `vps_task`, use
+the installed, updated CLI; an uncertain submission is never retried.
+
 `vps_run` already waits for the final receipt: make one call and let the tool
 return, without repeatedly polling `vps_status`, logs or a shell. To await a
 job already running, call `vps_wait` once with its `connection:job_id` from

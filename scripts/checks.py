@@ -324,6 +324,8 @@ def main():
         print("Running service + input/process/result SHA256 round trip: passed", flush=True)
         execute(name, "release", json.dumps({"id": task["id"]}).encode() + b"\n")
         verify_budgeted_transfers(name, root, evidence)
+        from scripts.recipe_checks import verify_recipes
+        verify_recipes(name, root, evidence, execute, payload)
         with tempfile.TemporaryDirectory(dir=root) as fixture:
             source = Path(fixture); (source / 'input.txt').write_text('21\n')
             (source / 'src').mkdir(); (source / 'src/app.py').write_text('original\n')

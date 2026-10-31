@@ -14,7 +14,7 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
             async with Client(mcp_server.server) as client:
                 tools = await client.list_tools()
                 self.assertEqual({t.name for t in tools.tools}, {'vps_status', 'vps_run', 'vps_wait', 'vps_fetch', 'vps_release',
-                    'vps_project_prepare', 'vps_project_run',
+                    'vps_project_prepare', 'vps_project_run', 'vps_task',
                     'admin_settings_get', 'admin_settings_preview', 'admin_settings_apply', 'admin_invitation_create',
                     'vps_server_add','vps_connect_from_clipboard', 'vps_agent_desktop'})
                 run = next(tool for tool in tools.tools if tool.name == 'vps_run')
@@ -31,6 +31,15 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
                 response = await client.call_tool('vps_wait', {'job_id': result['job_ref'], 'timeout': 15})
                 self.assertEqual(response.structured_content, result)
                 wait.assert_called_once_with(result['job_ref'], 15, None)
+
+    async def test_recipe_tool_uses_the_common_project_router(self):
+        import project_tasks
+        with patch.object(project_tasks, 'execute', return_value=(0, {'status': 'planned'})) as execute:
+            async with Client(mcp_server.server) as client:
+                result = await client.call_tool('vps_task', {'source': '/source', 'recipe': 'test',
+                    'agent': 'Tests', 'disk_gib': 1, 'plan_only': True})
+                self.assertEqual(result.structured_content['status'], 'planned')
+                execute.assert_called_once_with('/source', 'test', 'Tests', 1, 1, None, 900, None, 'any', True)
 
     async def test_project_tools_forward_stored_reference(self):
         reference = 'preprod:demo:' + 'a' * 64
