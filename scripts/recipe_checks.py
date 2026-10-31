@@ -23,7 +23,7 @@ def verify_recipes(container, root, evidence, execute, payload):
         'package-lock.json': json.dumps({'name': 'recipe-ci', 'version': '1.0.0', 'lockfileVersion': 3,
                                         'packages': {'': {'name': 'recipe-ci', 'version': '1.0.0'}}}),
         'api.js': "require('http').createServer((q,s)=>{if(q.url==='/health'){s.end('ok')}else{s.setHeader('Content-Type','text/html');s.end('<title>Recipe VPS</title><p id=answer>42</p>')}}).listen(Number(process.argv[2]),'127.0.0.1')",
-        'test.js': "const assert=require('assert/strict'),fs=require('fs'),{chromium}=require('playwright');"
+        'test.js': "const assert=require('assert/strict'),fs=require('fs'),{chromium}=require('playwright-core');"
                    "(async()=>{const browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH,args:['--no-sandbox','--disable-dev-shm-usage']});"
                    "try{const page=await browser.newPage();const origin=process.env.ATELIER_SERVICE_API_ORIGIN;await page.goto(origin);"
                    "assert.equal(await page.title(),'Recipe VPS');assert.equal(await page.locator('#answer').textContent(),'42');"
