@@ -95,7 +95,7 @@ def main():
         project_used = sum((Path(base) / n).lstat().st_blocks * 512
                            for base, dirs, files in os.walk(WORKSPACE) for n in dirs + files)
     budget = quota_bytes(physical.f_bavail * physical.f_frsize, project_used)
-    run(["setquota", "-P", str(PROJECT_ID), "0", str(budget // 1024), "0", "500000", str(MOUNT)])
+    run(["setquota", "-P", str(PROJECT_ID), "0", str(budget // 1024), "0", str(max(500000, budget // 32768)), str(MOUNT)])
     os.chown(WORKSPACE, 10001, 10001)
     marker = WORKSPACE / ".volume-id"
     if marker.exists() and marker.read_text().strip() != VOLUME_ID:

@@ -6,24 +6,62 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
-from typing import Any
+from typing import Annotated, Any
+
+from pydantic import Field
 
 from mcp.server import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError, UnexpectedToolError
 
 import client_config
 import vps
 from telemetry import public_label
 
 ROOT = Path(__file__).resolve().parent
-server = MCPServer('Atelier VPS', instructions='Prefer this VPS for compatible Linux builds, tests, Chromium and file processing. '
+JobTimeout = Annotated[int, Field(strict=True, ge=1, le=3600, description=
+    'Choose the task duration in seconds for this workload, including setup. '
+    'Custom values above 600 are supported, up to 3600. A host connection timeout '
+    'does not mean the job stopped; preserve its reference instead of resubmitting.')]
+
+
+class AtelierServer(MCPServer):
+    async def call_tool(self, name, arguments, context=None):
+        try:
+            return await super().call_tool(name, arguments, context)
+        except UnexpectedToolError as exc:
+            if isinstance(exc.__cause__, vps.RoutingError):
+                raise ToolError(str(exc.__cause__)) from None
+            if isinstance(exc.__cause__, (TimeoutError, subprocess.TimeoutExpired)):
+                raise ToolError('The VPS connection timed out; the operation may still have completed. '
+                                'Preserve its job reference and inspect or wait for it; do not resubmit.') from None
+            raise
+
+
+server = AtelierServer('Atelier VPS', instructions='Prefer this VPS for compatible Linux builds, tests, Chromium and file processing. '
                    'Check vps_status, reserve CPU/RAM/disk with vps_run, fetch and verify useful results before release. '
+                   'Choose timeout explicitly for each workload (1..3600 seconds); 600 seconds is not a job limit. '
                    'Keep macOS, Metal, GPU, Docker daemon and Android emulator work on a compatible machine. '
-                   'Never send secrets or local dependencies; a refused or failed job is not a passed check.')
+                   'Never send secrets or local dependencies; a refused or failed job is not a passed check. '
+                   'Tool errors return text/JSON with ok=false and status=error; report their diagnostic as text.')
+
+
+async def text_errors(ctx, call_next):
+    result = await call_next(ctx)
+    if ctx.method == 'tools/call' and isinstance(result, dict) and result.get('isError'):
+        # Keep the diagnostic as data instead of triggering the client's generic error display.
+        error = '\n'.join(item['text'] for item in result['content'] if item['type'] == 'text')
+        value = {'ok': False, 'status': 'error', 'error': error}
+        return {**result, 'isError': False, 'structuredContent': value,
+                'content': [{'type': 'text', 'text': json.dumps(value, ensure_ascii=False)}]}
+    return result
+
+
+server.middleware.append(text_errors)
 
 
 def response(action, request=None, source=None, host=None):
     return vps.json_request(host or client_config.host(), action, request, source=source,
-                            timeout=3700 if action=='run' else 30)[1]
+                            timeout=3700 if action=='run' else 300 if action=='release' else 60)[1]
 
 
 @server.tool(structured_output=True)
@@ -34,6 +72,17 @@ def vps_status(server: str | None = None) -> dict[str, Any]:
     A job must fit one worker; combined RAM is never one shared address space.
     """
     return vps.fleet_status(server)
+
+
+@server.tool(structured_output=True)
+def vps_cleanup(server: str | None = None) -> dict[str, Any]:
+    """Trim managed package caches on idle authenticated servers, or report busy.
+
+    Preserves jobs/results, immutable source versions, models, profiles, shared
+    tools and untracked caches. Uses the same locks as hourly automatic cleanup.
+    Omit server to maintain each connected developer workspace independently.
+    """
+    return vps.cleanup_caches(server)
 
 
 @server.tool(structured_output=True)
@@ -64,7 +113,7 @@ def vps_agent_desktop(action: str = 'status', server: str | None = None,
     never shrink a reservation merely to fit a refusal or add a 2x margin.
     """
     if action not in {'status', 'start', 'stop'} or action == 'stop' and not confirmed_stop:
-        raise ValueError('use status/start, or confirm the finished desktop before stopping it')
+        raise ToolError('use status/start, or confirm the finished desktop before stopping it')
     import desktop_client
     profile, result = desktop_client.request(server, action, session_id, provider, ram_gib)
     allowed = {'available', 'active', 'id', 'provider', 'phase', 'started', 'expires', 'ram_bytes', 'disk_bytes', 'stopping'}
@@ -90,7 +139,7 @@ def vps_connect_from_clipboard() -> dict[str, Any]:
 
 @server.tool(structured_output=True)
 def vps_run(source: str, argv: list[str], agent: str, disk_gib: float,
-            ram_gib: float | None = None, cpus: int = 1, timeout: int = 900,
+            ram_gib: float | None = None, cpus: int = 1, timeout: JobTimeout = 900,
             server: str | None = None, arch: str = 'any') -> dict[str, Any]:
     """Run a Linux task, streaming filtered sources without a local archive.
 
@@ -109,9 +158,9 @@ def vps_run(source: str, argv: list[str], agent: str, disk_gib: float,
     """
     directory = Path(source).expanduser().resolve()
     if not directory.is_dir() or not argv or not all(isinstance(x, str) and '\x00' not in x for x in argv):
-        raise ValueError('an existing source directory and a nonempty argument array are required')
+        raise ToolError('an existing source directory and a nonempty argument array are required')
     if not all(math.isfinite(x) and x > 0 for x in (disk_gib, ram_gib) if x is not None):
-        raise ValueError('finite, positive disk and RAM reservations are required')
+        raise ToolError('finite, positive disk and RAM reservations are required')
     list(vps.inputs(directory, math.ceil(disk_gib * vps.GIB)))
     return vps.run_on_server({'argv': argv, 'agent': public_label(agent, 'Agent'),
                            'project': public_label(directory.name, 'Project'), 'timeout': timeout,
@@ -122,7 +171,7 @@ def vps_run(source: str, argv: list[str], agent: str, disk_gib: float,
 
 @server.tool(structured_output=True)
 def vps_project_prepare(source: str, project_id: str, disk_gib: float, cpus: int = 1,
-                        ram_gib: float | None = None, timeout: int = 1800,
+                        ram_gib: float | None = None, timeout: JobTimeout = 1800,
                         server: str | None = None, arch: str = 'any') -> dict[str, Any]:
     """Store one immutable, versioned project source on a developer's VPS.
 
@@ -136,7 +185,7 @@ def vps_project_prepare(source: str, project_id: str, disk_gib: float, cpus: int
 
 @server.tool(structured_output=True)
 def vps_project_run(project_ref: str, argv: list[str], agent: str, disk_gib: float,
-                    cpus: int = 1, ram_gib: float | None = None, timeout: int = 1800,
+                    cpus: int = 1, ram_gib: float | None = None, timeout: JobTimeout = 1800,
                     source: str | None = None, server: str | None = None) -> dict[str, Any]:
     """Run on the VPS from a stored source revision without uploading it again.
 
@@ -149,7 +198,7 @@ def vps_project_run(project_ref: str, argv: list[str], agent: str, disk_gib: flo
 
 @server.tool(structured_output=True)
 def vps_task(source: str, recipe: str, agent: str, disk_gib: float,
-             cpus: int = 1, ram_gib: float | None = None, timeout: int = 900,
+             cpus: int = 1, ram_gib: float | None = None, timeout: JobTimeout = 900,
              server: str | None = None, arch: str = 'any', plan_only: bool = False) -> dict[str, Any]:
     """Run a project recipe on an admissible VPS, automatically reusing versioned sources.
 
@@ -189,7 +238,7 @@ def vps_fetch(job_id: str, paths: list[str], project: str, server: str | None = 
     profile, ident = vps.job_target(job_id, server)
     directory = Path(project).expanduser().resolve()
     if not directory.is_dir():
-        raise ValueError('project directory must exist')
+        raise ToolError('project directory must exist')
     budget = vps.fetch_plan(profile['ssh_host'], ident, paths)
     temp_gib = max(0.025, math.ceil(budget['disk_bytes'] / 1024 ** 2) / 1024)
     wait = min(3700, max(120, math.ceil(budget['archive_bytes'] / 1024 ** 2) + 120))
@@ -203,13 +252,14 @@ def vps_fetch(job_id: str, paths: list[str], project: str, server: str | None = 
         completed = subprocess.run(command, capture_output=True, text=True, timeout=wait)
         log = directory / 'output/task-tmp/stdout.log'
         if completed.returncode:
-            raise RuntimeError('bounded fetch failed; inspect the preserved task workspace')
+            raise ToolError('bounded fetch failed; check the local disk reserve and preserve any previous '
+                            'output/task-tmp before retrying this fetch; do not resubmit the job')
         lines = log.read_text().splitlines()
         return next(json.loads(line) for line in reversed(lines) if line.startswith('{"verified_files"'))
     target = directory / 'output/task-tmp'
     free = shutil.disk_usage(directory)
     if free.free < max(free.total // 10, vps.GIB) + math.ceil(temp_gib * vps.GIB):
-        raise RuntimeError('insufficient local disk reserve for a verified transfer')
+        raise ToolError('insufficient local disk reserve for a verified transfer')
     target.mkdir(parents=True, exist_ok=False)
     env['TASK_WORKSPACE'] = str(target)
     result = subprocess.run(args, env=env, capture_output=True, text=True, timeout=wait)
@@ -222,7 +272,7 @@ def vps_fetch(job_id: str, paths: list[str], project: str, server: str | None = 
 def vps_release(job_id: str, results_preserved: bool, server: str | None = None) -> dict[str, Any]:
     """Delete only this completed remote job after its useful results are preserved."""
     if not results_preserved:
-        raise ValueError('fetch, verify and preserve useful results before release')
+        raise ToolError('fetch, verify and preserve useful results before release')
     profile, ident = vps.job_target(job_id, server)
     return response('release', {'id': ident}, host=profile['ssh_host'])
 

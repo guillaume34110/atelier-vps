@@ -152,6 +152,20 @@ class ArchiveTests(unittest.TestCase):
             self.assertEqual((Path(tmp) / "download/result.txt").read_text(), "processed")
 
 
+class InodeAdmissionTests(unittest.TestCase):
+    def test_inode_exhaustion_refuses_new_work_while_status_stays_available(self):
+        for remaining, budget, admitted in [(0, 1000000, False), (4095, 1000000, False),
+                                            (4096, 1000000, True), (63, 1024, False), (64, 1024, True)]:
+            with self.subTest(remaining=remaining), tempfile.TemporaryDirectory() as directory, \
+                    patch.object(worker, 'ROOT', Path(directory)), \
+                    patch.object(worker, 'capacity', return_value={'ok': True, 'free_inodes': remaining, 'budget_inodes': budget}), \
+                    patch.object(worker.resources, 'view', return_value={'active_count': 0}), \
+                    patch.object(worker.resources, 'fits', return_value=True):
+                result = worker.status()
+                self.assertTrue(result['ok'])
+                self.assertEqual(result['admit'], admitted)
+
+
 class WaitTests(unittest.TestCase):
     def test_wait_returns_only_after_receipt_and_reservation_finish(self):
         ident = 'a' * 32
@@ -203,7 +217,8 @@ class AdmissionTests(unittest.TestCase):
             probe = Path(tmp) / 'capacity'; probe.mkdir()
             def space(path):
                 return SimpleNamespace(f_bavail=70 * worker.GIB, f_bfree=70 * worker.GIB,
-                                       f_blocks=(80 if path == probe else 76) * worker.GIB, f_frsize=1)
+                                       f_blocks=(80 if path == probe else 76) * worker.GIB, f_frsize=1,
+                                       f_favail=100000, f_files=500000)
             with patch.dict(worker.os.environ, {'USEVPS_VOLUME_STATS': str(probe), 'USEVPS_VOLUME_ID': 'test'}), \
                     patch.object(worker, 'volume_ok', return_value=True), patch.object(worker.os, 'statvfs', side_effect=space), \
                     patch.object(worker, 'available_ram', return_value=5 * worker.GIB):
@@ -221,11 +236,13 @@ class AdmissionTests(unittest.TestCase):
             def space(path):
                 return SimpleNamespace(f_bavail=(27 if path == capacity else 7) * worker.GIB,
                                        f_bfree=(27 if path == capacity else 7) * worker.GIB,
-                                       f_blocks=(29 if path == capacity else 7) * worker.GIB, f_frsize=1)
+                                       f_blocks=(29 if path == capacity else 7) * worker.GIB, f_frsize=1,
+                                       f_favail=900000 if path == capacity else 5000, f_files=1000000)
             with patch.dict(worker.os.environ, {"USEVPS_VOLUME_STATS": str(capacity), "USEVPS_VOLUME_ID": "test", "USEVPS_HOST_RAM_RESERVE_GIB": "1"}), patch.object(worker, "volume_ok", return_value=True), patch.object(worker.os, "statvfs", side_effect=space), patch.object(worker, "available_ram", return_value=5 * worker.GIB):
                 s = worker.status()
                 self.assertEqual(s["free_bytes"], 27 * worker.GIB)
                 self.assertEqual(s["workspace_free_bytes"], 7 * worker.GIB)
+                self.assertEqual(s['free_inodes'], 5000)
                 self.assertTrue(s["admit"])
                 with patch.object(worker, "available_ram", return_value=worker.GIB):
                     self.assertFalse(worker.status()["admit"])

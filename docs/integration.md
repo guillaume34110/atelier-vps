@@ -20,7 +20,7 @@ For another compatible host, configure this command with absolute paths:
 ```
 
 Tools: `vps_status`, `vps_run`, `vps_project_prepare`, `vps_project_run`, `vps_wait`,
-`vps_fetch`, `vps_release`. Set the host's timeout
+`vps_fetch`, `vps_release`, `vps_cleanup`. Set the host's timeout
 above the longest remote job. The routing skill prefers compatible VPS work;
 it cannot override permissions, unavailable resources or incompatible runtimes.
 These tools share the widget's private registry and choose a compatible server
@@ -30,10 +30,42 @@ reference when fetching or releasing. `vps_server_add` and
 invitation tools require the separate administrator identity.
 See [multiple servers and invitations](fleet.md).
 
+Global status queries servers concurrently and excludes unavailable samples.
+Disk status also reports free inodes: admission preserves up to 4,096 free
+inodes for recovery, scaled down for small quotas. Per-developer inode quotas grow with
+their allocated disk space, retaining the previous minimums.
+Routing balances admitted work before preferring an existing source snapshot;
+new recipe revisions use temporary source copies. Explicitly prepare a version
+when persistent reuse is useful.
+
+Idle maintenance retains package caches for 30 days with a target 10% workspace
+quota budget. It removes the oldest package-manager downloads first, preserving
+the last hour's downloads, models, profiles, outputs and untracked data.
+`atelier-vps cleanup` or `vps_cleanup` invokes the same exclusive-lock procedure;
+it reports `busy` while work or deployment holds the lock. Old workers report
+that an update is required. A lost connection leaves cleanup uncertain; inspect
+the authenticated status's `cache_retention` record before another action.
+Busy work is checked again after a minute; completed maintenance normally waits
+an hour. Each pass removes at most eight scopes, with another bounded pass due
+when cold packages remain above budget. Hot packages and active work defer cleanup.
+
+Tool failures return a text/JSON diagnostic with `ok: false`, `status: "error"`
+and an `error` message, instead of the MCP client's generic error display.
+The request completed, but the operation failed: never treat it as a passed
+check or resubmit an uncertain job. Job receipts retain their original status
+and reference. Report errors as text; no error image needs to be opened.
+
 Codex-managed Git worktrees under `~/.codex/worktrees` can be used as sources
 after their Git registration and checkout backlink are verified. The surrounding
 Codex state, nested private directories, credentials, symlinks and hard-linked
 files are never transferred. An explicit source-root policy still applies.
+
+Agents choose the per-task `timeout` in seconds for `vps_run`, `vps_task`,
+`vps_project_prepare` and `vps_project_run` (CLI: `--timeout`). It includes setup
+and accepts 1–3600 seconds; 600 seconds is not a fixed job limit. For example,
+pass `timeout: 2400` for a task expected to need forty minutes. The MCP schema
+exposes these bounds and the shared skill asks agents to choose explicitly.
+A host request timeout does not cancel or restart an admitted job.
 
 `vps_run` holds one request open until the worker has completed the job and
 returns its receipt. Avoid repeatedly asking the model to poll for it. To wait

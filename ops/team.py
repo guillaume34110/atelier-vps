@@ -85,7 +85,7 @@ def allocations(policy, capacity):
         result[name] = {'enabled': enabled, 'cpus': cpus,
                         'cpu_shares': max(2, int(128 * user['cpu_percent'] / 100)),
                         'ram_bytes': ram, 'disk_bytes': disk, 'slots': slots,
-                        'inodes': max(1024, int(500000 * user['disk_percent'] / 100)),
+                        'inodes': max(1024, int(500000 * user['disk_percent'] / 100), disk // 32768),
                         'ssh_user': 'usevps' if name == 'owner' else 'avps-' + name}
     if any(totals[k] > 100 for k in ['cpu_percent', 'ram_percent', 'disk_percent']) or totals['slots'] > pool['slots']:
         raise ValueError('allocations exceed the pool; disabled developers retain their disk quota')

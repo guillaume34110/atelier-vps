@@ -24,7 +24,7 @@ class GatewayTests(unittest.TestCase):
                  (host, [{"Destination": "/workspace", "Source": config["workspace"]}, {"Destination": "/var/run/docker.sock", "Source": "/var/run/docker.sock"}])]
         for h, mounts in cases:
             info = [{"HostConfig": h, "Mounts": mounts, "State": {"Health": {"Status": "healthy"}}}]
-            with patch.dict(os.environ, {"SSH_ORIGINAL_COMMAND": "run"}), patch.object(gateway.Path, "read_text", return_value=json.dumps(config)), patch.object(gateway.subprocess, "check_output", side_effect=["uuid rw,prjquota", "container", json.dumps(info)]), patch.object(gateway.os, "execvp") as execute:
+            with patch.dict(os.environ, {"SSH_ORIGINAL_COMMAND": "run"}), patch.object(gateway.Path, "exists", return_value=False), patch.object(gateway.Path, "read_text", return_value=json.dumps(config)), patch.object(gateway.subprocess, "check_output", side_effect=["uuid rw,prjquota", "container", json.dumps(info)]), patch.object(gateway.os, "execvp") as execute:
                 with self.assertRaises(ValueError):
                     gateway.main()
                 execute.assert_not_called()
@@ -78,7 +78,7 @@ class GatewayTests(unittest.TestCase):
             host['Tmpfs'] = temporary
             host['PidsLimit'] = pids
             info = [{"HostConfig": host, "Mounts": mounts, "State": {"Health": {"Status": "healthy"}}}]
-            with patch.dict(os.environ, {"SSH_ORIGINAL_COMMAND": operation}), patch.object(gateway.Path, "read_text", return_value=json.dumps(config)), patch.object(gateway.subprocess, "check_output", side_effect=["uuid rw,prjquota", "container", json.dumps(info)]), patch.object(gateway.os, "execvp") as execute:
+            with patch.dict(os.environ, {"SSH_ORIGINAL_COMMAND": operation}), patch.object(gateway.Path, "exists", return_value=False), patch.object(gateway.Path, "read_text", return_value=json.dumps(config)), patch.object(gateway.subprocess, "check_output", side_effect=["uuid rw,prjquota", "container", json.dumps(info)]), patch.object(gateway.os, "execvp") as execute:
                 if not allowed:
                     with self.assertRaises(ValueError):
                         gateway.main()

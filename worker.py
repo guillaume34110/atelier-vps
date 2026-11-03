@@ -126,11 +126,13 @@ def capacity():
     return {"ok": True, "volume_id": os.environ["USEVPS_VOLUME_ID"],
             "free_bytes": free, "workspace_free_bytes": workspace_free,
             "used_bytes": used, "reserve_bytes": reserve,
-            "budget_bytes": budget, "host_available_ram": ram}
+            "budget_bytes": budget, "host_available_ram": ram,
+            "free_inodes": q.f_favail, "budget_inodes": q.f_files}
 
 
 def status():
     state = capacity()
+    inode_reserve = min(4096, max(64, state.get('budget_inodes', 409600) // 100))
     with resources.resource_lock(ROOT):
         pool = resources.view(ROOT, state)
     with (ROOT / '.queue.lock').open('a') as lock:
@@ -141,10 +143,11 @@ def status():
             maintenance = True
     maintenance = maintenance or os.environ.get('USEVPS_MAINTENANCE') == '1'
     state.update(pool=pool, busy=bool(pool['active_count']) or maintenance, maintenance=maintenance,
-                 admit=not maintenance and resources.fits(pool, 1, 64 * MIB, MIB),
+                 admit=not maintenance and state.get('free_inodes', inode_reserve) >= inode_reserve and resources.fits(pool, 1, 64 * MIB, MIB),
                  capabilities={'ram_profiles': True, 'quota_attributes_protected': True, 'failure_details': True,
                                'planning': True, 'desktop_sessions': True, 'job_wait': True, 'project_sources': True,
-                               'mac_worker': True, 'transfer_budgets': True, 'project_recipes': True},
+                               'mac_worker': True, 'transfer_budgets': True, 'project_recipes': True,
+                               'cache_maintenance': True},
                  scope={'id': os.environ.get('USEVPS_TENANT', 'owner'),
                         'mode': os.environ.get('USEVPS_MODE', 'opportunistic')})
     return state
@@ -381,11 +384,8 @@ def _run_job(request, stream, *, ident=None, persistent=None, profile_ready=None
         with resources.resource_lock(ROOT):
             if not ensure_receipt_reserve():
                 raise RuntimeError("receipt headroom unavailable; retrieve and release completed jobs")
-            cache = ROOT / 'cache'
-            cache.mkdir(exist_ok=True)
             task_cache = dependency_cache.scope(ROOT, request)
-            if not (ROOT / '.cache-accounting.json').exists():
-                resources.write_json(ROOT / '.cache-accounting.json', usage(cache))
+        lease.track_cache(task_cache.name, lambda: usage(task_cache))
         reserve_ram = int(float(os.environ.get("USEVPS_HOST_RAM_RESERVE_GIB", "1")) * GIB)
         path = ROOT / "jobs" / ident
         work = path / "work"
@@ -400,7 +400,7 @@ def _run_job(request, stream, *, ident=None, persistent=None, profile_ready=None
                 raise RuntimeError('input transfer timeout')
             state = capacity()
             growth = usage(path) + (max(0, usage(persistent) - persistent_start) if persistent else 0)
-            lease.update(process_memory({os.getpid()}), growth, {os.getpid()}, usage(cache))
+            lease.update(process_memory({os.getpid()}), growth, {os.getpid()}, usage(task_cache))
             if state['free_bytes'] < state['reserve_bytes'] or state['used_bytes'] > state['budget_bytes'] or lease.value['disk_used'] > peak:
                 raise RuntimeError('disk limit')
             if lease.value['ram_peak'] > lease.value['ram_bytes']:
@@ -471,7 +471,7 @@ def _run_job(request, stream, *, ident=None, persistent=None, profile_ready=None
                 # rusage retains very short, exited children's peaks between samples.
                 child_peak = int(resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss) * (1 if sys.platform == 'darwin' else 1024)
                 persistent_growth = max(0, usage(persistent) - persistent_start) if persistent else 0
-                lease.update(process_memory(pids | {os.getpid()}), usage(path) + persistent_growth, pids, usage(cache),
+                lease.update(process_memory(pids | {os.getpid()}), usage(path) + persistent_growth, pids, usage(task_cache),
                              child_peak + process_memory({os.getpid()}))
                 if state['free_bytes'] < state['reserve_bytes'] or state['used_bytes'] > state['budget_bytes'] or lease.value['disk_used'] > peak:
                     return state, 'disk limit'
@@ -694,16 +694,19 @@ def main():
             cleanup = None
 
             def service_actions(self):
-                if (time.monotonic() - self.last_cleanup >= 3600
+                if (time.monotonic() - self.last_cleanup >= 60
                         and (self.cleanup is None or not self.cleanup.is_alive())):
                     # Deleting a large cold cache must not stall HTTP health checks.
-                    self.cleanup = threading.Thread(target=dependency_cache.maintain, args=(ROOT,), daemon=True)
+                    self.cleanup = threading.Thread(target=dependency_cache.maintain, args=(ROOT,),
+                                                    kwargs={'scheduled': True}, daemon=True)
                     self.cleanup.start()
                     self.last_cleanup = time.monotonic()
 
         Server(("0.0.0.0", 8080), Health).serve_forever()
     elif action == "status":
         print(json.dumps(public_status()))
+    elif action == 'cleanup':
+        print(json.dumps(dependency_cache.maintain(ROOT)))
     elif action == "run":
         result = run_job(read_request(), sys.stdin.buffer)
         print(json.dumps(result))

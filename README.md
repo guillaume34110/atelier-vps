@@ -40,7 +40,7 @@ atelier-vps status
 ```
 
 For recurring checks, [project recipes](docs/recipes.md) select a compatible VPS
-and reuse verified project sources and private dependency caches automatically:
+and reuse prepared project sources and private dependency caches automatically:
 
 ```sh
 atelier-vps task test --source ./my-project --disk-gib 2 --agent "Tests · API"
@@ -145,13 +145,14 @@ Exact versions and checksums are in [toolchain-lock.json](ops/toolchain-lock.jso
 Keep macOS APIs, Metal/MLX, GPU tasks, Docker daemon work, Android emulators and
 incompatible SDK/NDK binaries on a compatible machine.
 
-The base tools stay installed; they do not reserve idle RAM. Reproducible
-dependency caches are reused by project and lockfile digest. Using that scope
-refreshes its retention for 30 days. An hourly idle pass removes only expired,
-marked cache scopes, with the same exclusive lock that protects deployments.
-Running jobs, immutable tools, sources, results and untracked legacy caches are
-never swept. A cold scope downloads its locked dependencies again; allow that
-peak in the disk reservation.
+The base tools stay installed; they do not reserve idle RAM. Reproducible package
+caches are reused by project and lockfile digest, with 30 idle days of retention
+with a target 10% workspace-quota budget. Hourly idle maintenance evicts the oldest
+cold package downloads under the deployment lock. `atelier-vps cleanup` invokes
+the same safe maintenance on demand. Models, profiles, sources, job results,
+shared tools and untracked cache data remain preserved. Allow the dependency
+download peak after eviction. Resource checks scan only the current cache scope;
+another project's cold downloads do not slow every task measurement.
 
 An Apple Silicon Mac can optionally lend spare capacity to agents already on
 the developer's VPS. The Mac checks its own load and disk reserve before

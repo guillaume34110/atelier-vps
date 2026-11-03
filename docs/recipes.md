@@ -16,20 +16,20 @@ silently execute on the Mac. Use the existing `vps_run` for an identified one-of
 Linux command, or add an explicit recipe.
 
 Recipes select an authenticated, compatible VPS that can admit the **complete**
-CPU/RAM/disk reservation. Sources already present on an admissible worker are
-preferred. No executed command is retried elsewhere. An explicit `local` recipe
+CPU/RAM/disk reservation. Load is balanced before preferring sources already
+present on equally loaded workers. No executed command is retried elsewhere. An explicit `local` recipe
 returns `local_required` with its command; the agent runs it on the required
 machine under its normal local guards. This keeps macOS, Metal, devices, Docker
 daemons and personal browser profiles outside the shared Linux worker.
 
 ## Reusable sources and environments
 
-The first call fingerprints filtered sources, stores an immutable version and
-runs the recipe in its own verified working copy, within one reserved job.
-The next call probes that version and sends only the request and empty archive
-framing, not the project again. Local edits produce a new version. Parallel
-tasks get independent working copies, including writable dependencies and
-generated outputs; they never modify the stored version.
+Each call fingerprints filtered sources and probes for an explicitly prepared
+version. If present, it sends only the request and empty archive framing.
+Otherwise it streams temporary sources, removed with that completed job after
+verified result collection and release. Local edits do not accumulate stored
+versions. Use `project-prepare` deliberately for recurring, stable sources.
+Parallel tasks always get independent writable copies and preserve stored versions.
 
 The project ID is stable across Git worktrees of the same checkout. Set `id` in
 the JSON configuration to share the same logical project ID across clones or
@@ -40,16 +40,22 @@ SDKs remain shared and read-only. Recipe setup reconstructs each job's own
 dependencies using private package caches keyed by project and dependency locks.
 For example, npm uses `npm ci`, pnpm uses its frozen lockfile, and uv uses
 `uv sync --frozen`. A mutable virtualenv or `node_modules` directory is never
-shared between concurrent jobs. Managed caches retain their existing 30 idle
-day policy; installed base tools, project versions and useful results are not
-automatically deleted.
+shared between concurrent jobs. Idle package caches retain 30 days within a
+10% workspace-quota budget, evicting the oldest cold package-manager downloads.
+Models, profiles, source versions, unknown cache data and useful outputs are
+preserved. Base SDKs and browsers remain shared and read-only.
 
-Reserve the full peak: the initial stored source plus its working copy, setup,
-caches, downloads, temporary files, logs and outputs. If two source copies alone
-exceed the declared peak, routing keeps the recipe remote but uses a temporary
-source transfer instead of storing another version. Quotas and physical margins
-remain enforced throughout copying, setup and execution. `--plan` reports
-`stored`, `reused` or `temporary` without creating a job or writing a version.
+Reserve the full peak: working sources, setup, caches, downloads, temporary
+files, logs and outputs. Explicit preparation also reserves its stored version.
+Quotas and physical margins remain enforced throughout copying, setup and
+execution. `--plan` reports `reused` or `temporary` without creating a job or
+writing a version.
+
+Use the same project ID in `project-prepare` and the recipe configuration when
+preparing a reusable version. Automatic maintenance retries idle admission each
+minute; completed passes are normally hourly. Oversized cold caches continue in
+bounded passes until the target budget is reached. Running work and hot downloads
+can defer eviction; this target does not replace the hard workspace quota.
 
 ## Explicit recipes and complete E2E
 

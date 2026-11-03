@@ -71,17 +71,16 @@ def execute(source, recipe, agent, disk_gib, cpus=1, ram_gib=None, timeout=900,
         raise ValueError('recipe request exceeds the gateway budget')
     selected = vps.select_server(request, server, arch)
     present = selected.get('plan', {}).get('project', {}).get('present', False)
-    reusable = present or 2 * size < request['disk_bytes']
     route = {'target': 'vps', 'server': selected['id'], 'recipe': recipe,
              'source_revision': digest, 'source_bytes': size,
-             'mode': 'reused' if present else 'stored' if reusable else 'temporary',
+             'mode': 'reused' if present else 'temporary',
              'setup': value['setup'], 'services': [x['name'] for x in value['services']],
              'suggested_paths': ['receipt.json', 'stdout.log', *['work/' + p for p in value['artifacts']]]}
     if plan_only:
         return 0, {'ok': True, 'status': 'planned', 'route': route, 'reservation': selected.get('plan', {}).get('requested')}
     chosen = dict(selected['request'])
-    if reusable:
-        chosen['project_task'] = {'id': name, 'revision': digest, 'upload': not present}
+    if present:
+        chosen['project_task'] = {'id': name, 'revision': digest, 'upload': False}
     else:
         chosen.pop('project_task')
     selected['request'] = chosen

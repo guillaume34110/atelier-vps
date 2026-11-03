@@ -3,6 +3,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import sys
 import time
 
 import vps
@@ -10,19 +11,23 @@ import vps
 
 def relocate_cache(state, workspace, owner, remote_host, command, restore=False):
     """Rename one identified software scope; profiles never enter this scope."""
-    if not state or not remote_host:
+    if not state or owner is None:
         return
     relative = state['relative']
     if not re.fullmatch('cache/managed/[a-f0-9]{64}', relative):
         raise ValueError('invalid desktop software scope')
     data = {'work': str(workspace), 'owner': str(owner), 'relative': relative,
-            'restore': restore, 'spec': state['spec']}
+            'restore': restore, 'spec': state['spec'], 'local': not remote_host}
     script = '''
 import json,os,subprocess,sys
 from pathlib import Path
 value=INPUT
 work=Path(value['work']);owner=Path(value['owner']);rel=Path(value['relative'])
-assert work.parent==owner and work.name.startswith('.usevps-qa-') and not work.is_symlink()
+assert not work.is_symlink()
+if value['local']:
+ assert work.name.startswith('container-') and work.stat().st_uid==0 and work.resolve().is_relative_to(owner.resolve())
+else:
+ assert work.parent==owner and work.name.startswith('.usevps-qa-')
 assert (work/'.volume-id').read_text().strip()=='ci-volume'
 base=json.loads(Path('/etc/usevps-gateway.json').read_text())
 assert Path(base['workspace'])==owner and (owner/'.volume-id').read_text().strip()==base['volume_id']
@@ -54,8 +59,11 @@ if source.exists():
 else:
  print(json.dumps({'software_cache_renamed':False,'restored':value['restore']}))
 '''.replace('INPUT', repr(data))
-    command(['ssh', '-T', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes',
-             '-o', 'ServerAliveInterval=15', remote_host, 'python3', '-'], input=script.encode(), timeout=30)
+    if remote_host:
+        command(['ssh', '-T', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes',
+                 '-o', 'ServerAliveInterval=15', remote_host, 'python3', '-'], input=script.encode(), timeout=30)
+    else:
+        command([sys.executable, '-c', script], timeout=30)
 
 
 def verify_desktops(root, name, workspace, deployment, remote_host, command, execute, state):
@@ -63,7 +71,7 @@ def verify_desktops(root, name, workspace, deployment, remote_host, command, exe
         'import desktop_runtime,json;from pathlib import Path;p,s=desktop_runtime.location(Path("/workspace"));'
         'print(json.dumps({"relative":p.parent.relative_to("/workspace").as_posix(),"spec":s}))']))
     state.update(metadata)  # Keep recovery coordinates even after an interrupted SSH response.
-    owner = Path(deployment['workspace']) if remote_host else None
+    owner = Path(deployment['workspace']) if deployment.get('workspace') else None
     relocate_cache(state, workspace, owner, remote_host, command)
     evidence = root / 'evidence'
     for provider in ['chatgpt', 'claude']:

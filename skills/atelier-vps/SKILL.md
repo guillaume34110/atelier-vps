@@ -20,9 +20,10 @@ For recurring project checks, prefer `vps_task(source, recipe, agent, disk_gib)`
 or `atelier-vps task RECIPE --source PROJECT --disk-gib PEAK`. Inspect an uncertain
 recipe with `plan_only=true`/`--plan`. Standard Node/Python checks are discovered;
 `.atelier-vps.json` defines additional commands, architecture and E2E services.
-The tool selects a VPS and reuses a verified source version automatically. Budget
-both the initial version and its isolated task copy; when that would not fit, it
-uses a temporary remote transfer. Setup uses existing private package caches.
+The tool balances admissible VPS servers before preferring a cached source.
+It reuses explicitly prepared versions; new revisions use a temporary transfer
+and disappear when their completed job is released. Prepare a persistent version
+only for deliberate reuse. Setup reuses existing private package caches.
 `local_required` is a platform constraint, not an executed command. `unconfigured`
 means define the recipe or use `vps_run` for a known one-off Linux command; do not
 fall back to local compute merely because a recipe is missing. No command is
@@ -30,6 +31,12 @@ automatically retried after execution. Fetch/preserve `suggested_paths` before
 release, including failed recipe evidence. Service readiness must pass and each
 recipe cleans only its own services. If the host has not loaded `vps_task`, use
 the installed, updated CLI; an uncertain submission is never retried.
+
+Choose `timeout` explicitly for each task, including dependency setup and service
+startup: any integer from 1 to 3600 seconds is supported, including durations
+above 600 seconds (for example `timeout=2400` or `--timeout 2400`). Do not
+shorten a required scenario to fit a default. A connection timeout is separate
+from the job deadline; preserve the job reference and wait instead of rerunning.
 
 `vps_run` already waits for the final receipt: make one call and let the tool
 return, without repeatedly polling `vps_status`, logs or a shell. To await a
@@ -68,10 +75,13 @@ worker, root SSH, Docker or a virtual machine.
 Sources are filtered and streamed. Never transfer secrets, private SSH keys,
 environments, local dependencies, Git history or `CLAUDE.md`. Recreate Linux
 dependencies for the selected architecture from lockfiles and use the existing shared toolchain/caches.
-Managed dependency caches follow the project and lockfile digest; each use keeps
-that scope for another 30 days. Do not store sources, results, credentials or
-irreplaceable files in these disposable caches. Base tools remain installed.
-After an idle scope expires, budget for downloading its dependencies again.
+Managed dependency caches follow the project and lockfile digest. Reproducible
+package caches retain 30 idle days, subject to a 10% workspace-quota budget:
+hourly idle maintenance removes the oldest cold packages first, keeping the last
+hour's downloads. Models, profiles, source versions, outputs, unknown cache data
+and shared tools are preserved. `vps_cleanup` performs the same locked maintenance
+on demand; `busy` or an uncertain result is not success and must not be retried
+blindly. Budget for dependency downloads after eviction.
 For browser work use `CHROMIUM_PATH`, `--no-sandbox` and
 `--disable-dev-shm-usage`. Run real required services before claiming E2E success.
 Run browser tests and CI without personal credentials on the VPS; batch the
@@ -88,14 +98,17 @@ outputs, verify SHA256, and preserve what is needed outside the temporary
 directory. Then `vps_release` that job and remove only your own completed local
 transfer temporaries. If fetching or verification fails, or the state is uncertain,
 leave the job intact; preserve failure evidence before any release. Do not purge
-other jobs, project versions, untracked caches or personal data. Marked dependency
-caches expire after 30 idle days under the existing exclusive-lock cleanup.
+other jobs, project versions, untracked caches or personal data.
 
 Keep macOS APIs, Metal/MLX, GPU work, Docker daemon tasks, Android emulators and
 incompatible SDK/NDK binaries on a compatible machine. A timeout, memory stop,
 quota stop or incomplete receipt is a failure. Diagnose it and rerun the full
 required validation; never report it as passed. Preserve neighboring projects
 and all local disk/memory guards.
+
+Tool errors return text/JSON with `ok: false`, `status: "error"` and an `error`
+diagnostic. The operation failed even though the MCP request completed. Report
+the diagnostic as text; do not create or open an image just to announce failure.
 
 The MCP connection is local stdio over an existing restricted SSH alias. A cloned
 repository alone does not grant a cloud chat access to the local computer. See

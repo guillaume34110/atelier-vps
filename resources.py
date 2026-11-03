@@ -154,6 +154,7 @@ def leases(root):
             value = json.loads(raw)
             if (not re.fullmatch(r'[a-f0-9]{32}', value['id']) or path.stem != value['id']
                     or not re.fullmatch(r'[0-9]+:[0-9]+', value['runner'])
+                    or value.get('cache_scope') is not None and not re.fullmatch('[a-f0-9]{64}', value['cache_scope'])
                     or any(type(value[k]) is not int or value[k] < 0
                            for k in ('cpus', 'ram_bytes', 'disk_bytes', 'ram_used', 'disk_used'))):
                 raise RuntimeError('invalid resource reservation')
@@ -218,6 +219,18 @@ class Lease:
         self.root, self.value, self.cores = root, value, cores
         self.path = root / '.leases' / (value['id'] + '.json')
 
+    def track_cache(self, scope, measure):
+        if not isinstance(scope, str) or not re.fullmatch('[a-f0-9]{64}', scope):
+            raise ValueError('invalid cache scope')
+        with resource_lock(self.root):
+            shared = any(item['id'] != self.value['id'] and item.get('cache_scope') == scope
+                         for item in leases(self.root))
+            self.value['cache_scope'] = scope
+            write_json(self.path, self.value)
+            if not shared:
+                # A restarted supervisor must not reuse a stale high-water mark.
+                write_json(self.root / ('.cache-accounting-' + scope + '.json'), measure())
+
     def update(self, ram_used, disk_used, pids, cache_used, ram_peak=0):
         with resource_lock(self.root):
             active = leases(self.root)
@@ -226,13 +239,15 @@ class Lease:
                               ram_used=ram_used, ram_peak=max(ram_used, ram_peak, current.get('ram_peak', 0)),
                               disk_used=disk_used + current.get('cache_bytes', 0))
             write_json(self.path, self.value)
-            state_path = self.root / '.cache-accounting.json'
+            scope = self.value.get('cache_scope')
+            state_path = self.root / ('.cache-accounting-' + scope + '.json' if scope else '.cache-accounting.json')
             previous = json.loads(state_path.read_text()) if state_path.exists() else cache_used
             growth = max(0, cache_used - previous)
             active = leases(self.root)
-            # Shared downloads benefit all active jobs; divide their growth once.
-            for index, item in enumerate(active):
-                share = growth // len(active) + (index < growth % len(active))
+            consumers = [item for item in active if item.get('cache_scope') == scope] if scope else active
+            # Charge a shared download once, only to jobs using that cache.
+            for index, item in enumerate(consumers):
+                share = growth // len(consumers) + (index < growth % len(consumers))
                 item['cache_bytes'] = item.get('cache_bytes', 0) + share
                 item['disk_used'] += share
                 write_json(self.root / '.leases' / (item['id'] + '.json'), item)
@@ -314,6 +329,10 @@ def reserve(root, ident, request, capacity):
             if claimed:
                 with resource_lock(root):
                     path.unlink(missing_ok=True)
-                    if not leases(root):
+                    active = leases(root)
+                    scope = lease.value.get('cache_scope')
+                    if scope and not any(item.get('cache_scope') == scope for item in active):
+                        (root / ('.cache-accounting-' + scope + '.json')).unlink(missing_ok=True)
+                    if not active:
                         (root / '.cache-accounting.json').unlink(missing_ok=True)
             fcntl.flock(queue, fcntl.LOCK_UN)
