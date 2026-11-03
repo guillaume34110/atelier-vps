@@ -6,6 +6,13 @@ import os
 import re
 from pathlib import Path
 import subprocess
+import sys
+
+
+def capture_timeout():
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    import client_config
+    return max(100, len(client_config.active_connections()) * 90 + 150)
 
 
 def main():
@@ -31,7 +38,7 @@ def main():
                     *(['--capture-layouts'] if args.layouts else []), *(['--exercise-admin'] if args.admin else []),
                     *(['--capture-mac-worker'] if args.mac_fixture else []),
                     *(['--capture-failure'] if args.failure else []),
-                    *(['--failure-id',args.failure_id] if args.failure_id else [])], check=True, timeout=100)
+                    *(['--failure-id',args.failure_id] if args.failure_id else [])], check=True, timeout=capture_timeout())
     result = json.loads(image.with_suffix('.json').read_text())
     assert image.read_bytes().startswith(b'\x89PNG\r\n\x1a\n')
     if args.failure:

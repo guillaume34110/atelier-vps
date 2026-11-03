@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Client for the restricted usevps SSH gateway; no third-party dependencies."""
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import io
 import json
@@ -25,6 +26,10 @@ SKIP = {".git", "node_modules", ".venv", "venv", ".cache", "__pycache__",
         ".config", ".codex", ".claude", ".agents", ".desktops", ".agent-auth",
         ".npmrc", ".pypirc", ".netrc", ".aws", ".kube", ".DS_Store"}
 SKIP.update({'deployment.local.json', 'docker-compose.local.yaml', 'auth.json', 'credentials.json'})
+
+
+class RoutingError(RuntimeError):
+    """A public diagnostic containing only validated server and admission metadata."""
 
 
 def managed_worktree(project, home):
@@ -225,12 +230,10 @@ def validate_status(state):
 def server_states(server=None):
     """Fresh authenticated samples; a failed server never contributes stale capacity."""
     profiles = [client_config.connection(server)] if server else client_config.active_connections()
-    rows = []
-    seen = {}
-    for profile in profiles:
+    def sample(profile):
         row = {**profile, 'connected': False}
         try:
-            rc, state = json_request(profile['ssh_host'], 'status', timeout=15)
+            rc, state = json_request(profile['ssh_host'], 'status', timeout=45)
             if rc:
                 raise ValueError('unhealthy worker')
             validate_status(state)
@@ -239,17 +242,28 @@ def server_states(server=None):
             if profile.get('scope') and state.get('scope', {}).get('id') != profile['scope']:
                 raise ValueError('worker identity changed')
             row.update(connected=True, state=state)
+        except TimeoutError:
+            row.update(error='SSH status timed out; no current capacity sample', error_code='status_timeout')
+        except (RuntimeError, ValueError, OSError) as exc:
+            reason = str(exc)
+            code = {'server identity changed': 'server_identity_changed',
+                    'worker identity changed': 'worker_identity_changed'}.get(reason, 'status_unavailable')
+            row.update(error='SSH unavailable or worker identity changed', error_code=code)
+        return row
+    with ThreadPoolExecutor(max_workers=max(1, len(profiles))) as executor:
+        rows = list(executor.map(sample, profiles))
+    seen = {}
+    for row in rows:
+        if row['connected']:
+            state = row['state']
             identity = state.get('server_id')
             if identity:
                 if identity in seen:
                     row['duplicate_of'] = seen[identity]
                 else:
-                    seen[identity] = profile['id']
+                    seen[identity] = row['id']
             elif len(profiles) > 1:
                 row['identity_required'] = True
-        except (RuntimeError, ValueError, OSError, TimeoutError):
-            row['error'] = 'SSH unavailable or worker identity changed'
-        rows.append(row)
     return rows
 
 
@@ -277,7 +291,7 @@ def fleet_status(server=None):
     value['global'] = summary
     compact = []
     for row in rows:
-        entry = {key:row[key] for key in ['id','name','team','connected','enabled','duplicate_of','identity_required','error'] if key in row}
+        entry = {key:row[key] for key in ['id','name','team','connected','enabled','duplicate_of','identity_required','error','error_code'] if key in row}
         if row['connected']:
             state=row['state']; pool=state['pool']
             entry.update(server_id=state.get('server_id'), scope=state.get('scope'), admit=state.get('admit'), maintenance=state.get('maintenance'),
@@ -290,6 +304,26 @@ def fleet_status(server=None):
     return value
 
 
+def cleanup_caches(server=None):
+    """Maintain only authenticated developers' managed package caches, under the worker's idle lock."""
+    results = []
+    for row in server_states(server):
+        if not row['connected'] or row.get('duplicate_of') or row.get('identity_required'):
+            results.append({'server': row['id'], 'status': 'unavailable', 'error': row.get('error_code', 'identity_required')})
+            continue
+        if not row['state'].get('capabilities', {}).get('cache_maintenance'):
+            results.append({'server': row['id'], 'status': 'unavailable', 'error': 'update_worker_for_cache_maintenance'})
+            continue
+        try:
+            rc, value = json_request(row['ssh_host'], 'cleanup', timeout=300)
+            if rc:
+                value = {**value, 'status': 'error'}
+        except (TimeoutError, RuntimeError, ValueError, OSError):
+            value = {'status': 'unknown', 'error': 'cleanup state uncertain; inspect cache_retention before any retry'}
+        results.append({'server': row['id'], **value})
+    return {'ok': bool(results) and all(row.get('status') == 'completed' for row in results), 'servers': results}
+
+
 def select_server(request, server=None, arch='any'):
     if arch not in {'aarch64','x86_64','any'}:
         raise ValueError('architecture must be aarch64, x86_64 or any')
@@ -297,6 +331,7 @@ def select_server(request, server=None, arch='any'):
     diagnostics = []
     for row in server_states(server):
         if not row['enabled'] or not row['connected'] or row.get('duplicate_of') or row.get('identity_required'):
+            diagnostics.append({'server': row['id'], 'reason': row.get('error_code', 'unavailable')})
             continue
         state = row['state']
         machine_arch = state.get('telemetry',{}).get('arch')
@@ -320,7 +355,7 @@ def select_server(request, server=None, arch='any'):
             needed['ram_bytes'] = GIB
         if state.get('capabilities',{}).get('planning'):
             try:
-                rc, plan = json_request(row['ssh_host'], 'plan', needed, timeout=15)
+                rc, plan = json_request(row['ssh_host'], 'plan', needed, timeout=45)
                 if plan.get('scope',{}).get('id','owner') != state.get('scope',{}).get('id','owner'):
                     raise ValueError('planning identity changed')
             except (RuntimeError,ValueError,OSError,TimeoutError):
@@ -341,9 +376,9 @@ def select_server(request, server=None, arch='any'):
         row['request'] = needed
         candidates.append(row)
     if not candidates:
-        raise RuntimeError('No compatible server can admit the full reservation: ' + json.dumps(diagnostics, separators=(',',':')))
-    selected = min(candidates, key=lambda row:(not row.get('plan', {}).get('project', {}).get('present', False),
-                    row['state']['pool'].get('active_count',0),
+        raise RoutingError('No compatible server can admit the full reservation: ' + json.dumps(diagnostics, separators=(',',':')))
+    selected = min(candidates, key=lambda row:(row['state']['pool'].get('active_count',0) / row['state']['pool']['max_jobs'],
+                    not row.get('plan', {}).get('project', {}).get('present', False),
                     -row['state']['pool'].get('cpu_available',0), -row['state']['pool'].get('ram_available',0)))
     return selected
 
@@ -453,10 +488,13 @@ def wait_for_job(reference, timeout=3600, server=None):
     profile, ident = job_target(reference, server)
     row = server_states(profile['id'])[0]
     if not row['connected']:
-        raise RuntimeError('SSH unavailable or worker identity changed')
+        raise RoutingError('Cannot inspect this job: ' + row.get('error_code', 'status_unavailable')
+                           + '; preserve its reference and inspect before retrying')
     if not row['state'].get('capabilities', {}).get('job_wait'):
-        raise RuntimeError('this worker does not support job waiting; update the worker first')
+        raise RoutingError('this worker does not support job waiting; update the worker first')
     rc, value = json_request(profile['ssh_host'], 'fetch', {'id': ident, 'wait_timeout': timeout}, timeout=timeout + 30)
+    if rc and value.get('error') == 'job not found or already released':
+        return {'job_ref': profile['id'] + ':' + ident, 'status': 'unknown', 'timed_out': False}
     if (rc or value.get('kind') != 'job_wait' or value.get('id') != ident
             or value.get('status') not in ('running', 'passed', 'failed', 'unknown')
             or type(value.get('timed_out')) is not bool
@@ -558,6 +596,7 @@ def main():
     status = commands.add_parser("status")
     status.add_argument('--global', dest='global_status', action='store_true',
                         help='compare all registered servers (the default)')
+    commands.add_parser('cleanup', help='trim managed package caches while idle; preserve jobs, models and profiles')
     servers = commands.add_parser('servers', help='list or register a private server connection')
     servers.add_argument('operation', nargs='?', choices=['list','add','enable','disable'], default='list')
     servers.add_argument('--id')
@@ -581,7 +620,8 @@ def main():
     desktop = commands.add_parser('desktop', help='reserved VPS programs and private system screen sharing')
     desktop.add_argument('operation', choices=['status', 'start', 'open', 'stop'])
     desktop.add_argument('--id')
-    desktop.add_argument('--provider', choices=['chatgpt', 'claude'], default='chatgpt')
+    desktop.add_argument('--provider', choices=['chatgpt', 'claude', 'workbench'], default='chatgpt')
+    desktop.add_argument('--pack', dest='packs', action='append', default=[], choices=['geometry', '3d', 'drawing', 'cad', 'agents'])
     desktop.add_argument('--ram-gib', default='auto', help='auto, or an explicit RAM peak for a known workload')
     run = commands.add_parser("run")
     run.add_argument("--source", type=Path, required=True)
@@ -648,7 +688,7 @@ def main():
             desktop_client.open_desktop(args.server, args.id)
         else:
             ram = None if args.ram_gib == 'auto' else float(args.ram_gib)
-            _, result = desktop_client.request(args.server, args.operation, args.id, args.provider, ram)
+            _, result = desktop_client.request(args.server, args.operation, args.id, args.provider, ram, args.packs)
             print(json.dumps(result))
         return 0
     if args.action == 'invitations':
@@ -693,13 +733,18 @@ def main():
         if args.global_status and (args.host or args.server):
             parser.error('--global cannot be combined with --host or --server')
         if args.host:
-            rc, data = transport(args.host,'status',timeout=15)
+            rc, data = transport(args.host,'status',timeout=45)
             print(data.decode().strip());return rc
         result=fleet_status(args.server)
         print(json.dumps(result));return 0 if result['ok'] else 1
+    if args.action == 'cleanup':
+        if args.host:
+            raise ValueError('cleanup requires an authenticated saved server connection')
+        result = cleanup_caches(args.server)
+        print(json.dumps(result)); return 0 if result['ok'] else 1
     if args.action == "release":
         profile, ident=job_target(args.id,args.server) if not args.host else ({'ssh_host':args.host},args.id)
-        rc, data = transport(profile['ssh_host'], "release", {"id": ident},timeout=30)
+        rc, data = transport(profile['ssh_host'], "release", {"id": ident},timeout=300)
         print(data.decode().strip())
         return rc
     if args.action == 'wait':

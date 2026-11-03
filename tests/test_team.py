@@ -25,6 +25,17 @@ def policy():
 
 
 class TeamTests(unittest.TestCase):
+    def test_large_disks_do_not_keep_small_fixed_inode_quotas(self):
+        candidate = policy()
+        candidate['pool']['disk_bytes'] = 76 * team.GIB
+        limits = team.allocations(candidate, {**CAPACITY, 'disk_bytes': 76 * team.GIB})
+        baseline = team.allocations(policy(), CAPACITY)
+        for name in ('owner', 'bob'):
+            self.assertEqual(limits[name]['inodes'], 38 * team.GIB // 32768)
+            self.assertEqual(limits[name]['ram_bytes'], baseline[name]['ram_bytes'])
+            self.assertEqual(limits[name]['cpus'], baseline[name]['cpus'])
+            self.assertEqual(limits[name]['disk_bytes'], 38 * team.GIB)
+
     def test_team_capacity_uses_separate_workers_without_overcommitting_cpus(self):
         stored = {'cpus': 6, 'ram_bytes': 48 * team.GIB, 'disk_bytes': 76 * team.GIB, 'slots': 4}
         state = {'capacity': stored, 'policy': policy(), 'owner_public_key': KEY,
@@ -110,7 +121,7 @@ class TeamTests(unittest.TestCase):
     def test_preview_refuses_disk_or_inode_quota_below_preserved_data(self):
         state = {'policy': policy(), 'capacity': CAPACITY, 'owner_public_key': KEY,
                  'tenants': {'owner': {'project_id': 34110}}}
-        for used, inodes in [(14 * team.GIB, 10), (team.GIB, 300000)]:
+        for used, inodes in [(14 * team.GIB, 10), (team.GIB, 10000000)]:
             with patch.object(settings, 'read', return_value={'mount': '/mnt/data'}), patch.object(settings, 'verify_mount'), patch.object(settings, 'quota_usage', return_value={34110: {'used': used, 'inodes': inodes}}), patch.object(settings.os, 'sched_getaffinity', return_value=set(range(4)), create=True), patch.object(settings, 'command') as mutate:
                 with self.assertRaisesRegex(ValueError, 'quota below existing data'):
                     settings.preview(state, policy())

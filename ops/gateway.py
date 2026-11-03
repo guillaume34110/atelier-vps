@@ -21,7 +21,7 @@ def server_identity():
 
 def main():
     operation = os.environ.get("SSH_ORIGINAL_COMMAND", "").strip()
-    if operation not in {"status", "plan", "run", "fetch", "release", "desktop", "mac"}:
+    if operation not in {"status", "plan", "run", "fetch", "release", "desktop", "mac", "cleanup"}:
         raise ValueError("unsupported worker operation")
     config = json.loads(Path("/etc/usevps-gateway.json").read_text())
     process_ceiling = config.get('pids_limit', 512)

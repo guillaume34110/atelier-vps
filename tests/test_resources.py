@@ -104,6 +104,25 @@ class ResourceTests(unittest.TestCase):
                 self.assertTrue(pool['active'][0]['orphaned'])
                 self.assertFalse(r.fits(pool, 1, r.GIB, r.GIB))
 
+    def test_cache_growth_is_shared_only_by_jobs_using_the_same_scope(self):
+        with self.claim('a') as first, self.claim('b') as second, self.claim('c') as other:
+            r.write_json(self.root / ('.cache-accounting-' + 'd' * 64 + '.json'), r.GIB)
+            samples = []
+            def measure():
+                samples.append(True)
+                return 0
+            for lease, scope in [(first, 'd' * 64), (second, 'd' * 64), (other, 'e' * 64)]:
+                lease.track_cache(scope, measure)
+            self.assertEqual(len(samples), 2)
+            self.assertEqual(json.loads((self.root / ('.cache-accounting-' + 'd' * 64 + '.json')).read_text()), 0)
+            first.update(0, 100, [], 200)
+            second.update(0, 900, [], 200)
+            other.update(0, 0, [], 50)
+            entries = {x['id']: x for x in r.leases(self.root)}
+            self.assertEqual([entries[k * 32]['cache_bytes'] for k in ['a', 'b', 'c']], [100, 100, 50])
+            self.assertEqual([entries[k * 32]['disk_used'] for k in ['a', 'b', 'c']], [200, 1000, 50])
+        self.assertFalse(list(self.root.glob('.cache-accounting-*.json')))
+
     def test_maintenance_excludes_jobs_but_completed_cleanup_can_overlap_jobs(self):
         with (self.root / '.queue.lock').open('a') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)

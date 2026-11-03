@@ -121,7 +121,7 @@ final class Monitor: ObservableObject {
         let started = ProcessInfo.processInfo.systemUptime
         do { try task.run() }
         catch { process = nil; finish(nil, started: started, connection: connection); return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self, weak task] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 45) { [weak self, weak task] in
             guard let task = task, self?.process === task, task.isRunning else { return }
             task.terminate()
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak task] in
@@ -141,6 +141,9 @@ final class Monitor: ObservableObject {
             _ = bounded(errors.fileHandleForReading, limit: 8192)
             task.waitUntilExit()
             let result = task.terminationStatus == 0 ? data : nil
+            if CommandLine.arguments.contains("--capture"), task.terminationStatus != 0 {
+                fputs("Status SSH failed for \(connection.id): exit \(task.terminationStatus)\n", stderr)
+            }
             DispatchQueue.main.async { [weak self] in
                 self?.process = nil
                 self?.finish(result, started: started, connection: connection)
@@ -165,6 +168,9 @@ final class Monitor: ObservableObject {
                 let active = !next.connectedAgents.isEmpty || servers[index].successfulSamples < 2
                 nextSample[connection.id] = Date().addingTimeInterval(active ? 5 : 30)
             } catch {
+                if CommandLine.arguments.contains("--capture") {
+                    fputs("Status rejected for \(connection.id), \(data?.count ?? 0) bytes: \(error)\n", stderr)
+                }
                 servers[index].connected = false
                 let failures = (retryCount[connection.id] ?? 0) + 1; retryCount[connection.id] = failures
                 let delay = min(60.0, 5 * pow(2.0, Double(min(failures - 1, 4))))
@@ -660,9 +666,14 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         administration.configure(monitor.administratorConnection)
         administration.load()
         if CommandLine.arguments.contains("--capture") {
-            let deadline = CommandLine.arguments.contains("--capture-failure") ? 85.0 : 55.0
+            let deadline = max(55.0, Double(monitor.servers.filter { $0.connection.active }.count) * 90 + 60)
+                + (CommandLine.arguments.contains("--capture-failure") ? 30 : 0)
             DispatchQueue.main.asyncAfter(deadline: .now() + deadline) { [weak self] in
-                if self?.capturing != true { fputs("Live widget capture timed out waiting for authenticated status or private details\n", stderr); exit(1) }
+                if let self = self, !self.capturing {
+                    let samples = self.monitor.servers.map { "\($0.id):\($0.successfulSamples):\($0.connected)" }.joined(separator: ",")
+                    fputs("Live widget capture timed out: samples=\(samples), global=\(self.monitor.successfulSamples), admin=\(self.administration.authorized), busy=\(self.administration.busy), stage=\(self.adminCheckStage)\n", stderr)
+                    exit(1)
+                }
             }
         }
     }

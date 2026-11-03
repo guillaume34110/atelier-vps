@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import shlex
 import signal
 import subprocess
 import sys
@@ -87,10 +88,14 @@ def verify_budgeted_transfers(container, root, evidence):
         assert plan['bytes'] > 256 * 1024 ** 2 and plan['disk_bytes'] > 2 * plan['bytes'], plan
         execute(container, 'fetch', json.dumps({**request, 'max_bytes': 256 * 1024 ** 2}).encode() + b'\n', success=False)
         archive = fixture / 'result.tar'
+        transfer_timeout = min(3700, max(180, (plan['archive_bytes'] + 1024 ** 2 - 1) // 1024 ** 2 + 120))
+        fetch_command = ['docker', 'exec', '-i', '--user', '10001:10001', container, *WORKER_EXEC, 'fetch']
+        if os.environ.get('DOCKER_HOST', '').startswith('ssh://'):
+            fetch_command = ['ssh', '-T', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes',
+                             os.environ['DOCKER_HOST'][len('ssh://'):], shlex.join(fetch_command)]
         with archive.open('wb') as out:
-            result = subprocess.run(['docker', 'exec', '-i', '--user', '10001:10001', container,
-                                     *WORKER_EXEC, 'fetch'], input=json.dumps({**request, 'max_bytes': plan['bytes']}).encode() + b'\n',
-                                    stdout=out, stderr=subprocess.PIPE, timeout=180)
+            result = subprocess.run(fetch_command, input=json.dumps({**request, 'max_bytes': plan['bytes']}).encode() + b'\n',
+                                    stdout=out, stderr=subprocess.PIPE, timeout=transfer_timeout)
         assert result.returncode == 0 and archive.stat().st_size <= plan['archive_bytes'], result.stderr[-2000:]
         target = fixture / 'verified'
         assert vps.unpack_result(archive, target, plan['bytes']) == 2
@@ -165,19 +170,29 @@ def main():
     root.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
     env["TMPDIR"] = str(root)
+    installed = os.environ.get('USEVPS_CI_TOOLCHAIN_ROOT')
+    if installed:
+        env['PATH'] = str(Path(installed) / 'usr/local/bin') + os.pathsep + env.get('PATH', '')
     command([sys.executable, "-m", "unittest", "discover", "-s", "tests", "-v"], cwd=REPO, env=env)
     print("Complete unit suite: passed", flush=True)
     remote = os.environ.get('DOCKER_HOST', '').startswith('ssh://')
     remote_host = os.environ.get('DOCKER_HOST', '')[len('ssh://'):]
     deployment = json.loads((REPO / 'ops/deployment.local.json').read_text()) if remote else {}
+    if not remote and os.environ.get('USEVPS_CI_OWNER_WORKSPACE'):
+        deployment['workspace'] = os.environ['USEVPS_CI_OWNER_WORKSPACE']
     local = not remote
     volume = Path(deployment['volume_mount']) if remote else None
-    dev = Path(deployment['toolchain_root']) if remote else root / "devroot"
+    installed_dev = os.environ.get('USEVPS_CI_TOOLCHAIN_ROOT') if local else None
+    dev = Path(deployment['toolchain_root']) if remote else Path(installed_dev) if installed_dev else root / "devroot"
     if local:
         if sys.platform != "linux":
             raise RuntimeError("use the existing VPS Docker daemon; toolchain provisioning needs Linux")
         prefix = ["sudo", "-n"] if os.geteuid() else []
-        command([*prefix, sys.executable, str(REPO / "ops/provision_env.py"), "--root", str(dev)])
+        if installed_dev:
+            metadata = json.loads((dev / 'opt/usevps-dev.json').read_text())
+            assert metadata['spec_sha256'] == hashlib.sha256((REPO / 'ops/toolchain-lock.json').read_bytes()).hexdigest()
+        else:
+            command([*prefix, sys.executable, str(REPO / "ops/provision_env.py"), "--root", str(dev)])
     mounts = []
     for dst, src in {"/usr": "usr", "/bin": "usr/bin", "/sbin": "usr/sbin", "/lib": "usr/lib",
                      "/lib64": "usr/lib64", "/etc": "etc", "/opt": "opt"}.items():
@@ -549,7 +564,7 @@ def main():
                         pass
                 process.terminate()
                 process.communicate(timeout=10)
-        if remote and desktop_cache:
+        if deployment.get('workspace') and desktop_cache:
             desktop_checks.relocate_cache(desktop_cache, workspace, Path(deployment['workspace']),
                                            remote_host, command, restore=True)
         if not complete:
@@ -563,7 +578,8 @@ def main():
             capacity.chmod(0o700)
             capacity.rmdir()
             cleanup_dev = "import pathlib,os,shutil,sys; p=pathlib.Path(sys.argv[1]); assert p.name=='devroot' and (p/'.usevps-owned').is_file() and not os.path.ismount(p/'proc'); shutil.rmtree(p)"
-            command([*( ["sudo", "-n"] if os.geteuid() else []), sys.executable, "-c", cleanup_dev, str(dev)])
+            if not installed_dev:
+                command([*( ["sudo", "-n"] if os.geteuid() else []), sys.executable, "-c", cleanup_dev, str(dev)])
         else:
             cleanup = "from pathlib import Path; import shutil; p=Path(" + repr(str(workspace)) + "); assert p.name.startswith('.usevps-qa-'); shutil.rmtree(p)"
             command(["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", remote_host, "python3", "-"], input=cleanup.encode())

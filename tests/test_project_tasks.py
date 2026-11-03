@@ -24,17 +24,19 @@ class ProjectRouting(unittest.TestCase):
         return {'id': 'preprod', 'request': dict(request), 'plan': {'project': {'present': self.present}},
                 'state': {}}
 
-    def test_first_run_then_reuse_does_not_upload_again(self):
+    def test_new_sources_are_temporary_and_explicitly_prepared_versions_are_reused(self):
         self.present = False
         def execute(selected, source):
             self.source = source
-            self.upload = selected['request']['project_task']['upload']
-            return 0, {'status': 'passed', 'id': 'a' * 32, 'managed_project': selected['request']['project_task']}
+            value = selected['request'].get('project_task')
+            self.upload = value['upload'] if value else None
+            return 0, {'status': 'passed', 'id': 'a' * 32, **({'managed_project': value} if value else {})}
         with patch.object(vps, 'select_server', side_effect=self.selected), patch.object(vps, 'run_selected', side_effect=execute):
             rc, result = project_tasks.execute(self.root, 'test', 'Tests', 1)
             self.assertEqual(rc, 0)
-            self.assertEqual(result['route']['mode'], 'stored')
-            self.assertTrue(self.upload)
+            self.assertEqual(result['route']['mode'], 'temporary')
+            self.assertIsNone(self.upload)
+            self.assertNotIn('project_ref', result)
             self.assertEqual(self.source, self.root)
             digest = self.claim['project_task']['revision']
             self.present = True

@@ -33,9 +33,11 @@ lecture seule dans l'image, à `/app/AGENTS.md`.
   entre travaux d'un même développeur. Ne pas
   installer un second SDK ou navigateur sans besoin concret et budget explicite.
 - Réutiliser les caches de dépendances gérés par projet et empreinte des fichiers
-  de verrouillage. Leur dernière utilisation prolonge la rétention de 30 jours ;
-  seul le nettoyage au repos sous verrou exclusif peut retirer ces caches
-  identifiés. Ne jamais y stocker sources, secrets ou résultats irremplaçables.
+  de verrouillage. La rétention habituelle est de 30 jours ; les seuls caches de
+  paquets régénérables visent un budget de 10 % du quota. Au repos, les évincer du
+  plus ancien au plus récent, après au moins une heure d'inactivité. Le nettoyage reste au
+  repos sous verrou exclusif. Préserver modèles, profils, résultats, versions de
+  sources et caches non identifiés. Ne jamais y stocker de données irremplaçables.
   Les outils de base, caches anciens non suivis et données des calculs restent
   préservés. La marge RAM automatique s'applique une fois, sans multiplicateur ×2.
 - Les sources de projets gérées sont conservées par version dans l'espace privé

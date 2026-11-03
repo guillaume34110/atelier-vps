@@ -96,7 +96,47 @@ class Fleet(unittest.TestCase):
             value['capabilities']['project_recipes'] = True
             value['capabilities']['project_sources'] = True
         self.states['paris-worker']['project_present'] = True
+        self.assertEqual(vps.select_server(request)['id'], 'lyon')
+        self.states['paris-worker'] = state('a')
+        self.states['paris-worker']['project_present'] = True
+        self.states['paris-worker']['capabilities'].update(project_recipes=True, project_sources=True)
         self.assertEqual(vps.select_server(request)['id'], 'paris')
+
+    def test_status_requests_overlap_and_keep_connection_order(self):
+        import threading
+        barrier = threading.Barrier(2)
+        def request(host, operation, **kwargs):
+            self.assertEqual(kwargs['timeout'], 45)
+            barrier.wait(timeout=5)
+            return 0, self.states[host]
+        with patch.object(vps, 'json_request', side_effect=request):
+            rows = vps.server_states()
+        self.assertEqual([row['id'] for row in rows], ['paris', 'lyon'])
+        self.assertTrue(all(row['connected'] for row in rows))
+
+    def test_offline_server_has_a_private_safe_diagnostic_and_is_not_planned(self):
+        self.states['paris-worker'] = TimeoutError('private transport detail')
+        self.states['lyon-worker'] = TimeoutError('private transport detail')
+        with self.assertRaisesRegex(RuntimeError, 'status_timeout') as error:
+            vps.select_server(self.request)
+        self.assertNotIn('private transport detail', str(error.exception))
+        self.assertFalse(any(op == 'plan' for _, op, _ in self.calls))
+
+    def test_cleanup_never_uses_an_unverified_identity_or_old_worker(self):
+        self.profiles[0]['server_id'] = 'f' * 64
+        self.states['lyon-worker']['capabilities']['cache_maintenance'] = True
+        def request(host, operation, *args, **kwargs):
+            if operation == 'status':
+                return 0, self.states[host]
+            self.assertEqual((host, operation), ('lyon-worker', 'cleanup'))
+            return 0, {'status': 'completed', 'removed_scopes': 1, 'reclaimed_bytes': 123}
+        with patch.object(vps, 'json_request', side_effect=request) as execute:
+            result = vps.cleanup_caches()
+        self.assertFalse(result['ok'])
+        self.assertEqual(result['servers'][1]['reclaimed_bytes'], 123)
+        self.assertEqual(sum(call.args[1] == 'cleanup' for call in execute.call_args_list), 1)
+        with patch.object(vps.client_config, 'active_connections', return_value=[]):
+            self.assertFalse(vps.cleanup_caches()['ok'])
 
     def test_large_sources_select_updated_workers_before_submission(self):
         request = {**self.request, 'source_bytes': 65 * 1024 ** 2}
@@ -181,6 +221,18 @@ class Fleet(unittest.TestCase):
         with self.assertRaises(ValueError):vps.job_target('c'*32)
         with self.assertRaises(ValueError):vps.job_target('paris:'+ 'c'*32,server='lyon')
         with self.assertRaises(ValueError):vps.job_target('paris:../../secret')
+
+    def test_wait_for_a_released_job_is_unknown_and_never_reexecuted(self):
+        self.states['paris-worker']['capabilities']['job_wait'] = True
+        def request(host, operation, body=None, **kwargs):
+            if operation == 'status':
+                return 0, self.states[host]
+            self.assertEqual((operation, body), ('fetch', {'id': 'a' * 32, 'wait_timeout': 0}))
+            return 1, {'ok': False, 'error': 'job not found or already released'}
+        with patch.object(vps, 'json_request', side_effect=request) as execute:
+            result = vps.wait_for_job('paris:' + 'a' * 32, timeout=0)
+        self.assertEqual(result, {'job_ref': 'paris:' + 'a' * 32, 'status': 'unknown', 'timed_out': False})
+        self.assertEqual(execute.call_count, 2)
 
     def test_admin_target_is_verified_before_preview_or_apply(self):
         self.profiles[0].update(admin_ssh_host='paris-admin',server_id='a'*64)
