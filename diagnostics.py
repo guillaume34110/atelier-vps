@@ -62,6 +62,7 @@ def build(path, state):
     code = state.get('returncode', 1)
     kind = {'task memory limit': 'memory', 'host memory pressure': 'host_memory',
             'disk limit': 'disk', 'timeout': 'timeout', 'log limit': 'logs',
+            'input transfer timeout': 'timeout',
             'log capture failed': 'logs', 'worker restarted': 'restart',
             'quota prevents receipt': 'disk'}.get(reason, 'internal' if reason else 'signal' if code < 0 else 'command')
     tail = ''

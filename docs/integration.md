@@ -55,6 +55,33 @@ The request completed, but the operation failed: never treat it as a passed
 check or resubmit an uncertain job. Job receipts retain their original status
 and reference. Report errors as text; no error image needs to be opened.
 
+`vps_errors` reads private device diagnostics, including failures before a worker
+could start a job. The CLI `atelier-vps errors --hours 24 --report-project PROJECT`
+stores a new full report below `PROJECT/output/vps-errors`. This journal starts
+at installation: it cannot reconstruct already released historical jobs. Recent
+details use at most sixteen 1 MiB files; cumulative counts for up to 256 distinct
+signatures plus an overflow bucket remain, and original job data is untouched.
+Only allowlisted metadata and masked error text are recorded, never argv, source
+contents, invitation arguments or authentication payloads.
+
+For visual QA, use `vps_preview(project, path)` with the existing PNG paths
+returned by `vps_fetch`. It validates PNG checksums, pixels, size and project
+boundaries before returning native MCP image content. Failure returns text;
+do not repeatedly open an error image or repeat a successful calculation. The
+native image viewer and a VPS program's exit status are separate checks.
+
+Source uploads stream gzip while stdout/stderr are drained concurrently. The
+connection deadline includes the upload and terminates only its own transport
+process group. Updated workers advertise `input_completion`: the client assigns
+the job reference before submission and appends a completion marker only after
+all source members. Incomplete sources never start the command. An uncertain
+connection is never retried automatically. During upload, cache accounting is
+measured at phase boundaries; disk/RAM checks remain active during extraction.
+Result gzip is negotiated with updated workers; legacy clients retain their
+existing transfer format. Expanded disk budgets and SHA256 verification still
+apply. Omit `server` for portable work: an explicit `default` pins Personnel and
+cannot use spare Préprod capacity.
+
 Codex-managed Git worktrees under `~/.codex/worktrees` can be used as sources
 after their Git registration and checkout backlink are verified. The surrounding
 Codex state, nested private directories, credentials, symlinks and hard-linked

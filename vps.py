@@ -3,6 +3,7 @@
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
+import gzip
 import io
 import json
 import math
@@ -10,16 +11,21 @@ import os
 from pathlib import Path
 import re
 import shutil
+import signal
 import stat
 import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
+import time
+import uuid
 
 from worker import GIB, safe_path
 from telemetry import public_label
 import client_config
 import projects
+import error_journal
 
 SKIP = {".git", "node_modules", ".venv", "venv", ".cache", "__pycache__",
         "output", "dist", "build", ".next", "coverage", "CLAUDE.md", ".ssh",
@@ -79,7 +85,7 @@ def managed_worktree(project, home):
     return False
 
 
-def inputs(project, disk_bytes=None):
+def source_directory(project):
     project=project.resolve()
     home=Path.home().resolve()
     private=[(home/name).resolve() for name in ['.ssh','.config','.claude','.agents']]
@@ -96,6 +102,11 @@ def inputs(project, disk_bytes=None):
             raise ValueError('configure one to sixteen explicit source roots')
         if not any(project.is_relative_to(Path(path).resolve()) for path in roots):
             raise ValueError('this project is outside the authorized source roots')
+    return project, private
+
+
+def inputs(project, disk_bytes=None):
+    project, private = source_directory(project)
     total = 0
     private_children = [path for path in private if path.is_relative_to(project)]
     for base, dirs, files in os.walk(project, followlinks=False):
@@ -153,27 +164,51 @@ def transport(host, operation, request=None, payload=None, output=None, source=N
     if shutil.which('rtk'):
         command = ['rtk', 'proxy', *command]
     with subprocess.Popen(command, stdin=subprocess.PIPE, stdout=output or subprocess.PIPE,
-                          stderr=subprocess.PIPE) as proc:
-        try:
-            if request is not None:
-                proc.stdin.write(json.dumps(request).encode() + b"\n")
-            if payload:
-                with payload.open("rb") as src:
-                    shutil.copyfileobj(src, proc.stdin, 65536)
-            if source is not None or operation == 'run':
-                with tarfile.open(fileobj=proc.stdin, mode='w|') as archive:
-                    if source is not None:
-                        for file, name in inputs(source, request['disk_bytes']):
-                            archive.add(file, arcname=name, recursive=False)
-            proc.stdin.close()
-        except BrokenPipeError:
-            pass  # Read the admission error even when the source stream was refused.
-        proc.stdin = None
+                          stderr=subprocess.PIPE, start_new_session=True) as proc:
+        stream, proc.stdin = proc.stdin, None
+        failures = []
+
+        def send():
+            try:
+                with stream:
+                    if request is not None:
+                        stream.write(json.dumps(request).encode() + b"\n")
+                    if payload:
+                        with payload.open('rb') as src:
+                            shutil.copyfileobj(src, stream, 65536)
+                    if source is not None or operation == 'run':
+                        with gzip.GzipFile(fileobj=stream, mode='wb', compresslevel=1) as compressed, \
+                                tarfile.open(fileobj=compressed, mode='w|') as archive:
+                            if source is not None:
+                                for file, name in inputs(source, request['disk_bytes']):
+                                    if name == '.usevps-source-complete':
+                                        raise ValueError('reserved source completion marker')
+                                    archive.add(file, arcname=name, recursive=False)
+                            if request and request.get('source_complete'):
+                                archive.addfile(tarfile.TarInfo('.usevps-source-complete'))
+            except BrokenPipeError:
+                pass  # Collect the original admission diagnostic, never resubmit.
+            except Exception as exc:
+                failures.append(exc)
+
+        writer = threading.Thread(target=send, name='atelier-source-transfer', daemon=True)
+        writer.start()
         try:
             result, errors = proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
-            proc.kill(); proc.communicate()
+            # RTK can be the parent of SSH; terminate only this connection's process group.
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            proc.communicate()
+            writer.join(timeout=5)
             raise TimeoutError('SSH operation timed out; preserve any remote job before retrying') from None
+        writer.join(timeout=5)
+        if writer.is_alive():
+            raise TimeoutError('source transfer did not close; preserve the remote job reference')
+        if failures:
+            raise failures[0]
         if proc.returncode and not result:
             try:
                 failure = json.loads(errors)
@@ -194,6 +229,10 @@ def json_request(host, operation, request=None, source=None, timeout=30):
         raise ValueError('gateway response must be an object')
     if rc:
         value['ok'] = False
+    if rc or value.get('status') == 'failed' or value.get('ok') is False:
+        value['diagnostic_id'] = error_journal.record('remote.' + operation,
+            value.get('error') or value.get('reason') or 'command exited with code ' + str(value.get('returncode')),
+            server=host, code=value.get('reason') or value.get('status') or 'refused')
     return rc, value
 
 
@@ -376,7 +415,9 @@ def select_server(request, server=None, arch='any'):
         row['request'] = needed
         candidates.append(row)
     if not candidates:
-        raise RoutingError('No compatible server can admit the full reservation: ' + json.dumps(diagnostics, separators=(',',':')))
+        message = 'No compatible server can admit the full reservation: ' + json.dumps(diagnostics, separators=(',',':'))
+        error_journal.record('route', message, code='not_admitted')
+        raise RoutingError(message)
     selected = min(candidates, key=lambda row:(row['state']['pool'].get('active_count',0) / row['state']['pool']['max_jobs'],
                     not row.get('plan', {}).get('project', {}).get('present', False),
                     -row['state']['pool'].get('cpu_available',0), -row['state']['pool'].get('ram_available',0)))
@@ -398,7 +439,16 @@ def run_selected(selected, source):
     if selected['state'].get('server_id'):profile['server_id']=selected['state']['server_id']
     if not client_config.config_path().with_name('connections.json').exists() or profile!=previous:
         client_config.save_connection(profile)
-    rc, result = json_request(selected['ssh_host'], 'run', selected['request'], source=source, timeout=3700)
+    request = dict(selected['request'])
+    if selected['state'].get('capabilities', {}).get('input_completion'):
+        request.update(id=uuid.uuid4().hex, source_complete=True)
+    try:
+        rc, result = json_request(selected['ssh_host'], 'run', request, source=source, timeout=3700)
+    except (TimeoutError, OSError, RuntimeError, ValueError) as exc:
+        reference = selected['id'] + ':' + request['id'] if request.get('source_complete') else None
+        message = 'VPS submission state is uncertain' + ('; job_ref=' + reference if reference else '') + '; inspect this reference and do not resubmit. ' + str(exc)
+        error_journal.record('run', message, server=selected['id'], job_ref=reference, code='submission_uncertain')
+        raise RoutingError(message) from None
     result['connection'] = selected['id']
     if result.get('id'):
         safe_path(result['id'])
@@ -539,14 +589,31 @@ def fetch_plan(host, ident, paths):
         # Installed older workers cannot preview; preserve their existing protocol.
         return {'bytes': 256 * 1024 ** 2, 'archive_bytes': 280 * 1024 ** 2,
                 'disk_bytes': math.ceil(0.6 * GIB)}
-    rc, value = json_request(host, 'fetch', {'id': ident, 'paths': paths, 'preview': True})
-    if (rc or value.get('ok') is not True
+    options = {'compression': 'gzip'} if state.get('capabilities', {}).get('gzip_results') else {}
+    rc, value = json_request(host, 'fetch', {'id': ident, 'paths': paths, 'preview': True, **options})
+    if rc or value.get('ok') is False:
+        if value.get('error') == 'job not found or already released':
+            raise RoutingError('Job ' + ident + ' is unavailable or already released on its original server. Use the previously verified local results; do not resubmit the calculation or retry image paths that are absent.')
+        raise RoutingError('Result preview refused: ' + str(value.get('error', 'unknown refusal'))[:1024] + '; preserve the job and inspect before retrying.')
+    if (value.get('ok') is not True
             or any(type(value.get(key)) is not int or value[key] < 0
                    for key in ('bytes', 'archive_bytes', 'disk_bytes'))
             or value['archive_bytes'] < value['bytes']
             or value['disk_bytes'] < value['archive_bytes'] + value['bytes']):
         raise ValueError('invalid result transfer budget; preserve the remote task')
     return value
+
+
+def fetched_summary(destination, count):
+    images = []
+    for file in sorted(destination.rglob('*.png')):
+        if file.is_file() and not file.is_symlink():
+            images.append(str(file))
+            if len(images) == 8:
+                break
+    return {'verified_files': count, 'directory': str(destination), 'released': False,
+            'preview_images': images,
+            'preview_instruction': 'Use vps_preview(project, path) for these existing PNGs. If viewing fails, report its text once; do not reopen error images or guess another path.'}
 
 
 def unpack_result(archive, destination, max_bytes=256 * 1024 ** 2):
@@ -597,6 +664,9 @@ def main():
     status.add_argument('--global', dest='global_status', action='store_true',
                         help='compare all registered servers (the default)')
     commands.add_parser('cleanup', help='trim managed package caches while idle; preserve jobs, models and profiles')
+    errors = commands.add_parser('errors', help='read private client diagnostics, including failures before execution')
+    errors.add_argument('--hours', type=int, default=24)
+    errors.add_argument('--report-project', help='write a new private full JSON report below this project/output/vps-errors')
     servers = commands.add_parser('servers', help='list or register a private server connection')
     servers.add_argument('operation', nargs='?', choices=['list','add','enable','disable'], default='list')
     servers.add_argument('--id')
@@ -669,6 +739,24 @@ def main():
     release.add_argument("id")
     release.add_argument("--confirmed", action="store_true", required=True)
     args = parser.parse_args()
+    if args.action == 'errors':
+        value = error_journal.report(args.hours)
+        if args.report_project:
+            directory, _ = source_directory(Path(args.report_project).expanduser())
+            target = directory / 'output/vps-errors'
+            if target.is_symlink():
+                raise ValueError('unsafe report directory')
+            target.mkdir(parents=True, mode=0o700, exist_ok=True)
+            report = target / ('client-' + str(int(time.time())) + '-' + uuid.uuid4().hex[:8] + '.json')
+            with report.open('x') as out:
+                os.chmod(report, 0o600)
+                json.dump(value, out)
+            print(json.dumps({'ok': True, 'report': str(report), 'count': value['count'], 'by_operation': value['by_operation']}))
+        else:
+            print(json.dumps({'ok': True, 'count': value['count'], 'by_operation': value['by_operation'],
+                              'events': [{**e, 'error': e['error'][:512]} for e in value['events'][-8:]],
+                              'lifetime_count': sum(e['count'] for e in value['lifetime_totals'].values())}))
+        return 0
     if args.action == 'task':
         if args.host:
             raise ValueError('recipes require a registered server connection')
@@ -797,7 +885,8 @@ def main():
         staging = Path(staging)
         archive = staging / "result.tar"
         with archive.open("wb") as out:
-            rc, _ = transport(profile['ssh_host'], "fetch", {"id": ident, "paths": args.paths, 'max_bytes': budget['bytes']},
+            rc, _ = transport(profile['ssh_host'], "fetch", {"id": ident, "paths": args.paths, 'max_bytes': budget['bytes'],
+                              **({'compression': 'gzip'} if budget.get('compression') == 'gzip' else {})},
                               output=out, timeout=min(3600, max(120, math.ceil(budget['archive_bytes'] / 1024 ** 2) + 60)))
         if rc:
             raise RuntimeError("fetch failed; task remains on server")
@@ -805,7 +894,7 @@ def main():
             raise ValueError('result archive exceeds its announced disk budget')
         destination = root / ("vps-result-" + profile['id'] + '-' + ident)
         count = unpack_result(archive, destination, budget['bytes'])
-        print(json.dumps({"verified_files": count, "directory": str(destination), "released": False}))
+        print(json.dumps(fetched_summary(destination, count)))
     return 0
 
 
@@ -813,5 +902,6 @@ if __name__ == "__main__":
     try:
         sys.exit(main())
     except Exception as exc:
-        print(str(exc), file=sys.stderr)
+        ident = error_journal.record('cli', type(exc).__name__ + ': ' + str(exc))
+        print(str(exc) + ('; diagnostic_id=' + ident if ident else ''), file=sys.stderr)
         sys.exit(1)
