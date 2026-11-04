@@ -42,7 +42,7 @@ def execute(container, action, body=b"", success=True):
     return r.stdout
 
 
-def payload(argv, files=None, *, include_default=True, **options):
+def payload(argv, files=None, *, include_default=True, include_completion=True, **options):
     request = {"argv": argv, "disk_bytes": 16 * 1024 ** 2, "timeout": 20, **options}
     out = io.BytesIO()
     out.write(json.dumps(request).encode() + b"\n")
@@ -57,7 +57,29 @@ def payload(argv, files=None, *, include_default=True, **options):
             entry = tarfile.TarInfo(name)
             entry.size = len(content)
             tar.addfile(entry, io.BytesIO(content))
+        if request.get('source_complete') and include_completion:
+            tar.addfile(tarfile.TarInfo('.usevps-source-complete'))
     return out.getvalue()
+
+
+def verify_source_completion(container, evidence):
+    ident = uuid.uuid4().hex
+    ok = json.loads(execute(container, 'run', payload(['true'], id=ident, source_complete=True)))
+    assert ok['id'] == ident and ok['status'] == 'passed', ok
+    execute(container, 'run', payload(['true'], id=ident, source_complete=True), success=False)
+    preserved = execute(container, 'fetch', json.dumps({'id': ident, 'paths': ['receipt.json']}).encode() + b'\n')
+    with tarfile.open(fileobj=io.BytesIO(preserved)) as archive:
+        assert json.load(archive.extractfile('receipt.json')) == ok
+    execute(container, 'release', json.dumps({'id': ident}).encode() + b'\n')
+    ident = uuid.uuid4().hex
+    refused = json.loads(execute(container, 'run', payload(
+        ['python3', '-c', "from pathlib import Path;Path('must-not-run').write_text('unsafe')"],
+        id=ident, source_complete=True, include_completion=False), success=False))
+    assert refused['status'] == 'failed' and 'source transfer incomplete' in refused['reason'], refused
+    execute(container, 'fetch', json.dumps({'id': ident, 'paths': ['work/must-not-run']}).encode() + b'\n', success=False)
+    execute(container, 'release', json.dumps({'id': ident}).encode() + b'\n')
+    (evidence / 'source-completion.json').write_text(json.dumps({'complete': ok['status'], 'incomplete': refused['status'], 'duplicate': 'refused'}))
+    print('Complete source marker, duplicate identity refusal and incomplete-source nonexecution: passed', flush=True)
 
 
 def verify_budgeted_transfers(container, root, evidence):
@@ -83,7 +105,7 @@ def verify_budgeted_transfers(container, root, evidence):
         assert result.returncode == 0, result.stderr[-2000:]
         task = json.loads(result.stdout)
         assert task['status'] == 'passed', task
-        request = {'id': task['id'], 'paths': ['work/result.bin', 'receipt.json']}
+        request = {'id': task['id'], 'paths': ['work/result.bin', 'receipt.json'], 'compression': 'gzip'}
         plan = json.loads(execute(container, 'fetch', json.dumps({**request, 'preview': True}).encode() + b'\n'))
         assert plan['bytes'] > 256 * 1024 ** 2 and plan['disk_bytes'] > 2 * plan['bytes'], plan
         execute(container, 'fetch', json.dumps({**request, 'max_bytes': 256 * 1024 ** 2}).encode() + b'\n', success=False)
@@ -97,6 +119,8 @@ def verify_budgeted_transfers(container, root, evidence):
             result = subprocess.run(fetch_command, input=json.dumps({**request, 'max_bytes': plan['bytes']}).encode() + b'\n',
                                     stdout=out, stderr=subprocess.PIPE, timeout=transfer_timeout)
         assert result.returncode == 0 and archive.stat().st_size <= plan['archive_bytes'], result.stderr[-2000:]
+        with archive.open('rb') as compressed:
+            assert compressed.read(2) == b'\x1f\x8b'
         target = fixture / 'verified'
         assert vps.unpack_result(archive, target, plan['bytes']) == 2
         expected = hashlib.sha256()
@@ -170,6 +194,7 @@ def main():
     root.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
     env["TMPDIR"] = str(root)
+    env['ATELIER_VPS_ERROR_DIR'] = str(root / 'client-error-journal')
     installed = os.environ.get('USEVPS_CI_TOOLCHAIN_ROOT')
     if installed:
         env['PATH'] = str(Path(installed) / 'usr/local/bin') + os.pathsep + env.get('PATH', '')
@@ -338,6 +363,7 @@ def main():
         (evidence / 'transfer-proof.json').write_text(json.dumps(transfers))
         print("Running service + input/process/result SHA256 round trip: passed", flush=True)
         execute(name, "release", json.dumps({"id": task["id"]}).encode() + b"\n")
+        verify_source_completion(name, evidence)
         verify_budgeted_transfers(name, root, evidence)
         from scripts.recipe_checks import verify_recipes
         verify_recipes(name, root, evidence, execute, payload)

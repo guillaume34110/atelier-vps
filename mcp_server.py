@@ -2,19 +2,24 @@
 import json
 import math
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
 import sys
+import zlib
 from typing import Annotated, Any
 
 from pydantic import Field
 
 from mcp.server import MCPServer
+from mcp.server.mcpserver import Image
 from mcp.server.mcpserver.exceptions import ToolError, UnexpectedToolError
 
 import client_config
 import vps
+import error_journal
+import preview
 from telemetry import public_label
 
 ROOT = Path(__file__).resolve().parent
@@ -29,12 +34,15 @@ class AtelierServer(MCPServer):
         try:
             return await super().call_tool(name, arguments, context)
         except UnexpectedToolError as exc:
+            cause = exc.__cause__ or exc
+            diagnostic = error_journal.record('tool.' + name, type(cause).__name__ + ': ' + str(cause))
+            suffix = '; diagnostic_id=' + diagnostic if diagnostic else ''
             if isinstance(exc.__cause__, vps.RoutingError):
-                raise ToolError(str(exc.__cause__)) from None
+                raise ToolError(str(exc.__cause__) + suffix) from None
             if isinstance(exc.__cause__, (TimeoutError, subprocess.TimeoutExpired)):
                 raise ToolError('The VPS connection timed out; the operation may still have completed. '
-                                'Preserve its job reference and inspect or wait for it; do not resubmit.') from None
-            raise
+                                'Preserve its job reference and inspect or wait for it; do not resubmit.' + suffix) from None
+            raise ToolError('The operation failed. Read vps_errors for its private diagnostic; do not repeat an uncertain operation.' + suffix) from None
 
 
 server = AtelierServer('Atelier VPS', instructions='Prefer this VPS for compatible Linux builds, tests, Chromium and file processing. '
@@ -42,7 +50,9 @@ server = AtelierServer('Atelier VPS', instructions='Prefer this VPS for compatib
                    'Choose timeout explicitly for each workload (1..3600 seconds); 600 seconds is not a job limit. '
                    'Keep macOS, Metal, GPU, Docker daemon and Android emulator work on a compatible machine. '
                    'Never send secrets or local dependencies; a refused or failed job is not a passed check. '
-                   'Tool errors return text/JSON with ok=false and status=error; report their diagnostic as text.')
+                   'Tool errors return text/JSON with ok=false and status=error; report their diagnostic as text. '
+                   'Use vps_errors for recorded failures, including pre-admission refusals. '
+                   'Use vps_preview for fetched PNGs; an image-view failure must not trigger repeated image opens or another calculation.')
 
 
 async def text_errors(ctx, call_next):
@@ -50,13 +60,47 @@ async def text_errors(ctx, call_next):
     if ctx.method == 'tools/call' and isinstance(result, dict) and result.get('isError'):
         # Keep the diagnostic as data instead of triggering the client's generic error display.
         error = '\n'.join(item['text'] for item in result['content'] if item['type'] == 'text')
-        value = {'ok': False, 'status': 'error', 'error': error}
+        found = re.search(r'diagnostic_id=([a-f0-9]{32})', error)
+        params = ctx.params if isinstance(ctx.params, dict) else {}
+        ident = found.group(1) if found else error_journal.record('tool.' + params.get('name', 'unknown'), error)
+        value = {'ok': False, 'status': 'error', 'error': error, 'diagnostic_id': ident,
+                 'next_action': 'Inspect this text diagnostic with vps_errors. Do not repeat an image view or resubmit an uncertain job.'}
         return {**result, 'isError': False, 'structuredContent': value,
                 'content': [{'type': 'text', 'text': json.dumps(value, ensure_ascii=False)}]}
     return result
 
 
 server.middleware.append(text_errors)
+
+
+@server.tool(structured_output=True)
+def vps_errors(hours: int = 24) -> dict[str, Any]:
+    """Read bounded private text diagnostics, including refusals before a VPS job exists.
+
+    Reports only this device's journal since logging was installed. Preserve
+    job references; investigate each distinct cause rather than retrying it.
+    The CLI errors --report-project PROJECT saves the complete private report.
+    """
+    value = error_journal.report(hours)
+    return {'ok': True, 'since': value['since'], 'count': value['count'],
+            'by_operation': value['by_operation'],
+            'events': [{**e, 'error': e['error'][:512]} for e in value['events'][-8:]],
+            'lifetime_count': sum(e['count'] for e in value['lifetime_totals'].values())}
+
+
+@server.tool(structured_output=False)
+def vps_preview(project: str, path: str) -> Image:
+    """View one verified local VPS-result PNG through MCP instead of the native image viewer.
+
+    Use the existing preview_images paths returned by vps_fetch. RGB/RGBA PNGs
+    up to 4096x4096 and 8 MiB are verified before any image is returned. Missing,
+    corrupt or private paths return text only; stop and inspect instead of
+    reopening an error image. This does not fetch or repeat a calculation.
+    """
+    try:
+        return Image(data=preview.png(project, path), format='png')
+    except (ValueError, OSError, zlib.error) as exc:
+        raise ToolError('PNG preview unavailable: ' + str(exc)[:1024] + '. Report this text once; do not repeat image viewing.') from None
 
 
 def response(action, request=None, source=None, host=None):

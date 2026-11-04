@@ -303,6 +303,8 @@ def reserve(root, ident, request, capacity):
                     shared = False
                 if shared:
                     with resource_lock(root):
+                        if path.exists() or (root / 'jobs' / ident).exists():
+                            raise ValueError('job identity already exists; inspect it instead of resubmitting')
                         pool = view(root, capacity())
                         if fits(pool, cpus, ram, disk):
                             path.parent.mkdir(exist_ok=True)

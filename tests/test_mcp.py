@@ -11,6 +11,13 @@ from test_fleet import state
 
 
 class MCPTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.patch_journal = patch.dict('os.environ', {'ATELIER_VPS_ERROR_DIR': folder.name})
+        self.patch_journal.start()
+        self.addCleanup(self.patch_journal.stop)
+
     def assert_text_error(self, result):
         self.assertFalse(result.is_error)
         self.assertEqual([item.type for item in result.content], ['text'])
@@ -25,7 +32,7 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
             async with Client(mcp_server.server) as client:
                 tools = await client.list_tools()
                 self.assertEqual({t.name for t in tools.tools}, {'vps_status', 'vps_cleanup', 'vps_run', 'vps_wait', 'vps_fetch', 'vps_release',
-                    'vps_project_prepare', 'vps_project_run', 'vps_task',
+                    'vps_project_prepare', 'vps_project_run', 'vps_task', 'vps_errors', 'vps_preview',
                     'admin_settings_get', 'admin_settings_preview', 'admin_settings_apply', 'admin_invitation_create',
                     'vps_server_add','vps_connect_from_clipboard', 'vps_agent_desktop'})
                 run = next(tool for tool in tools.tools if tool.name == 'vps_run')
@@ -144,12 +151,18 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn('do not resubmit', result.content[0].text)
 
     async def test_unexpected_desktop_failure_keeps_private_details_out_of_response(self):
-        with patch('desktop_client.request', side_effect=ValueError('private-worker-detail')), \
-                self.assertLogs('mcp.server.mcpserver.server', level='ERROR'):
+        with patch('desktop_client.request', side_effect=ValueError('private-worker-detail api_key=private-secret-value')), \
+                self.assertNoLogs('mcp.server.mcpserver.server', level='ERROR'):
             async with Client(mcp_server.server) as client:
                 result = await client.call_tool('vps_agent_desktop')
         self.assert_text_error(result)
         self.assertNotIn('private-worker-detail', result.content[0].text)
+        self.assertNotIn('private-secret-value', result.content[0].text)
+        events = mcp_server.error_journal.report()['events']
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]['id'], result.structured_content['diagnostic_id'])
+        self.assertIn('private-worker-detail', events[0]['error'])
+        self.assertNotIn('private-secret-value', events[0]['error'])
 
     async def test_argument_validation_and_unknown_tools_return_text_errors(self):
         with patch.object(mcp_server.vps, 'transport') as transport:

@@ -9,8 +9,26 @@ the configured VPS, without waiting for local memory pressure. Check
 RAM and disk for the complete peak. Busy can be true while admission is true:
 several agents can share the pool.
 
+Inspect `vps_errors` after a tool failure: its private text journal includes
+refusals before any remote calculation exists. Keep `diagnostic_id` and `job_ref`;
+do not repeatedly submit the same operation. `atelier-vps errors --hours 24
+--report-project PROJECT` writes the full private report, including cumulative
+counts retained when bounded detailed event metadata rotates. Original remote
+receipts and results are preserved independently.
+
+For genuine visual QA of fetched PNGs, prefer `vps_preview(project, path)` with
+the exact existing `preview_images` path returned by `vps_fetch`. It returns the
+verified image through MCP and text only on error. Stop after one viewing error,
+report its text and preserve the successful compute receipt; do not open an
+error placeholder, guess more paths or rerun the calculation for that failure.
+If the host has not loaded this tool, reconnect MCP or mark visual QA blocked.
+Never claim a visual check passed without seeing the actual result.
+
 Use `arch="any"` for portable tasks; pin `arch="aarch64"` or
 `arch="x86_64"` when dependencies or outputs are architecture-specific.
+Omit `server` for portable work. Setting `server="default"` pins the small
+Personnel pool and prevents routing to free Préprod capacity. Pin a server only
+for an actual machine/data constraint, or to recover its existing job reference.
 For each project, identify the compatible part before executing: send Linux
 tests, builds, lint, headless browser checks and processing to an admissible VPS
 by default. Split mixed workloads so macOS, devices, GPU and personal-account

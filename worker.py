@@ -3,6 +3,7 @@ import ctypes
 import errno
 import fcntl
 import hashlib
+import gzip
 import io
 import json
 import math
@@ -147,7 +148,7 @@ def status():
                  capabilities={'ram_profiles': True, 'quota_attributes_protected': True, 'failure_details': True,
                                'planning': True, 'desktop_sessions': True, 'job_wait': True, 'project_sources': True,
                                'mac_worker': True, 'transfer_budgets': True, 'project_recipes': True,
-                               'cache_maintenance': True},
+                               'cache_maintenance': True, 'input_completion': True, 'gzip_results': True},
                  scope={'id': os.environ.get('USEVPS_TENANT', 'owner'),
                         'mode': os.environ.get('USEVPS_MODE', 'opportunistic')})
     return state
@@ -182,11 +183,19 @@ def public_status():
     return state
 
 
-def extract(stream, target, check=None, disk_bytes=None):
+def extract(stream, target, check=None, disk_bytes=None, require_complete=False):
     size, count = 0, 0
     since_check = 0
+    completed = False
     with tarfile.open(fileobj=stream, mode="r|*") as archive:
         for member in archive:
+            if completed:
+                raise ValueError('data follows source completion marker')
+            if require_complete and member.name == '.usevps-source-complete':
+                if not member.isfile() or member.size != 0:
+                    raise ValueError('invalid source completion marker')
+                completed = True
+                continue
             rel = safe_path(member.name)
             dest = target.joinpath(*rel.parts)
             count += 1
@@ -208,6 +217,8 @@ def extract(stream, target, check=None, disk_bytes=None):
                 dest.chmod(0o755 if member.mode & 0o111 else 0o644)
             else:
                 raise ValueError("links and special files are forbidden")
+    if require_complete and not completed:
+        raise ValueError('source transfer incomplete; command was not started')
     if check:
         check()
 
@@ -313,6 +324,10 @@ def validate_job_request(request):
     argv = request.get("argv")
     timeout = request.get("timeout", 1800)
     peak = request.get("disk_bytes", GIB)
+    if 'id' in request and (not isinstance(request['id'], str) or not re.fullmatch('[a-f0-9]{32}', request['id'])):
+        raise ValueError('invalid client job identity')
+    if 'source_complete' in request and type(request['source_complete']) is not bool:
+        raise ValueError('source completion flag must be boolean')
     if not isinstance(argv, list) or not argv or not all(isinstance(x, str) and "\x00" not in x for x in argv):
         raise ValueError("argv must be a nonempty string array")
     if not isinstance(timeout, int) or not 1 <= timeout <= 3600:
@@ -376,7 +391,9 @@ def _run_job(request, stream, *, ident=None, persistent=None, profile_ready=None
     argv, timeout, peak = validate_job_request(request)
     agent = public_label(request.get("agent"), "Agent non identifié")
     project = public_label(request.get("project"), "Projet non identifié")
-    ident = ident or uuid.uuid4().hex
+    if ident and request.get('id') and ident != request['id']:
+        raise ValueError('conflicting job identities')
+    ident = ident or request.get('id') or uuid.uuid4().hex
     if not re.fullmatch('[a-f0-9]{32}', ident):
         raise ValueError('invalid internal job identity')
     with resources.reserve(ROOT, ident, request, capacity) as lease:
@@ -385,7 +402,8 @@ def _run_job(request, stream, *, ident=None, persistent=None, profile_ready=None
             if not ensure_receipt_reserve():
                 raise RuntimeError("receipt headroom unavailable; retrieve and release completed jobs")
             task_cache = dependency_cache.scope(ROOT, request)
-        lease.track_cache(task_cache.name, lambda: usage(task_cache))
+        input_cache_bytes = usage(task_cache)
+        lease.track_cache(task_cache.name, lambda: input_cache_bytes)
         reserve_ram = int(float(os.environ.get("USEVPS_HOST_RAM_RESERVE_GIB", "1")) * GIB)
         path = ROOT / "jobs" / ident
         work = path / "work"
@@ -395,12 +413,14 @@ def _run_job(request, stream, *, ident=None, persistent=None, profile_ready=None
                   "agent": agent, "project": project, "runner": process_token(os.getpid()),
                   "reservation": {k: lease.value[k] for k in ('cpus', 'ram_bytes', 'disk_bytes', 'ram_source')}}
         receipt(path, result)
-        def check_input():
+        def check_input(final=False):
             if time.monotonic() - start > timeout:
                 raise RuntimeError('input transfer timeout')
             state = capacity()
             growth = usage(path) + (max(0, usage(persistent) - persistent_start) if persistent else 0)
-            lease.update(process_memory({os.getpid()}), growth, {os.getpid()}, usage(task_cache))
+            # Project tools have not started; remeasure their cache at the phase boundary.
+            lease.update(process_memory({os.getpid()}), growth, {os.getpid()},
+                         usage(task_cache) if final else input_cache_bytes)
             if state['free_bytes'] < state['reserve_bytes'] or state['used_bytes'] > state['budget_bytes'] or lease.value['disk_used'] > peak:
                 raise RuntimeError('disk limit')
             if lease.value['ram_peak'] > lease.value['ram_bytes']:
@@ -415,7 +435,8 @@ def _run_job(request, stream, *, ident=None, persistent=None, profile_ready=None
                 persistent_start = usage(persistent)
             check_input()
             with Transfer(ROOT, stream, 'upload', ident, agent, project) as transfer:
-                extract(transfer, work, check_input, peak)
+                extract(transfer, work, check_input, peak, request.get('source_complete', False))
+            check_input(final=True)
             if request.get('project_task'):
                 result['managed_project'] = projects.ensure_work(ROOT, request['project_task'], work, ident, peak, check_input)
                 if not result['managed_project']['created']:
@@ -620,17 +641,26 @@ def fetch(request, stream):
         raise ValueError('result exceeds the receiving disk budget')
     if request.get('preview'):
         # Include PAX headers, block padding and the bounded checksum manifest.
-        archive_bytes = total + len(files) * 32768 + 5 * MIB
+        compression = request.get('compression')
+        if compression not in (None, 'gzip'):
+            raise ValueError('unsupported result compression')
+        archive_bytes = total + (total + 999) // 1000 + len(files) * 32768 + 5 * MIB
         stream.write(json.dumps({'ok': True, 'files': len(files), 'bytes': total,
-                                 'archive_bytes': archive_bytes, 'disk_bytes': archive_bytes + total + MIB}).encode())
+                                 'archive_bytes': archive_bytes, 'disk_bytes': archive_bytes + total + MIB,
+                                 'compression': compression}).encode())
         return
     manifest = {}
     for name, file in files.items():
         with file.open("rb") as source:
             digest = hashlib.file_digest(source, "sha256").hexdigest()
         manifest[name] = {"bytes": file.stat().st_size, "sha256": digest}
+    compression = request.get('compression')
+    if compression not in (None, 'gzip'):
+        raise ValueError('unsupported result compression')
+    from contextlib import nullcontext
     with Transfer(ROOT, stream, 'download', path.name, state.get('agent'), state.get('project')) as transfer, \
-            tarfile.open(fileobj=transfer, mode="w|") as archive:
+            (gzip.GzipFile(fileobj=transfer, mode='wb', compresslevel=1) if compression else nullcontext(transfer)) as output, \
+            tarfile.open(fileobj=output, mode="w|") as archive:
         data = json.dumps(manifest).encode()
         info = tarfile.TarInfo("manifest.json")
         info.size = len(data)
