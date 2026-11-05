@@ -139,7 +139,9 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
             with patch.object(mcp_server.Path, 'home', return_value=root), \
                     patch.object(mcp_server.vps, 'job_target', return_value=({'id': 'test', 'ssh_host': 'test-worker'}, 'a' * 32)), \
                     patch.object(mcp_server.vps, 'fetch_plan', return_value={'disk_bytes': 1, 'archive_bytes': 1}), \
-                    patch.object(mcp_server.subprocess, 'run', return_value=subprocess.CompletedProcess([], 1)), \
+                    patch.object(mcp_server.subprocess, 'run', return_value=subprocess.CompletedProcess(
+                        [], 1, stdout='{"budget_stop":"disk reserve"}',
+                        stderr='STOP: prior workspace exists api_key=private-secret-value')), \
                     patch.object(mcp_server.vps, 'run_on_server') as submit, \
                     self.assertNoLogs('mcp.server.mcpserver.server', level='ERROR'):
                 async with Client(mcp_server.server) as client:
@@ -149,6 +151,15 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
             self.assert_text_error(result)
             self.assertIn('output/task-tmp', result.content[0].text)
             self.assertIn('do not resubmit', result.content[0].text)
+            self.assertNotIn('private-secret-value', result.content[0].text)
+            events = mcp_server.error_journal.report()['events']
+            guard = next(event for event in events if event['operation'] == 'fetch.guard')
+            self.assertEqual(guard['job_ref'], 'test:' + 'a' * 32)
+            self.assertEqual(guard['code'], 'exit_1')
+            self.assertIn('prior workspace exists', guard['error'])
+            self.assertIn('disk reserve', guard['error'])
+            self.assertNotIn('private-secret-value', guard['error'])
+            self.assertIn(guard['id'], result.content[0].text)
 
     async def test_unexpected_desktop_failure_keeps_private_details_out_of_response(self):
         with patch('desktop_client.request', side_effect=ValueError('private-worker-detail api_key=private-secret-value')), \

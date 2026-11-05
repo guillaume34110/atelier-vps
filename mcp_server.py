@@ -296,8 +296,13 @@ def vps_fetch(job_id: str, paths: list[str], project: str, server: str | None = 
         completed = subprocess.run(command, capture_output=True, text=True, timeout=wait)
         log = directory / 'output/task-tmp/stdout.log'
         if completed.returncode:
+            diagnostic = error_journal.record('fetch.guard',
+                (completed.stderr or '')[-4096:] + '\n' + (completed.stdout or '')[-4096:],
+                server=profile['ssh_host'], job_ref=profile['id'] + ':' + ident,
+                code='exit_' + str(completed.returncode))
             raise ToolError('bounded fetch failed; check the local disk reserve and preserve any previous '
-                            'output/task-tmp before retrying this fetch; do not resubmit the job')
+                            'output/task-tmp before retrying this fetch; do not resubmit the job. '
+                            'Read vps_errors for the private guard diagnostic ' + str(diagnostic))
         lines = log.read_text().splitlines()
         return next(json.loads(line) for line in reversed(lines) if line.startswith('{"verified_files"'))
     target = directory / 'output/task-tmp'
