@@ -106,6 +106,7 @@ final class RemoteAgentsControl: ObservableObject {
 }
 
 struct AgentsView: View {
+    let layout: WidgetLayout
     @ObservedObject var monitor: Monitor
     @ObservedObject var control: RemoteAgentsControl
     @State private var stopping: ServerConnection?
@@ -124,9 +125,12 @@ struct AgentsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 Text(L("Your programs run on the VPS. Sign in to your account inside the remote desktop."))
-                    .font(.system(size: 12)).foregroundColor(Paint.ivory).fixedSize(horizontal: false, vertical: true)
-                ForEach(monitor.servers.filter { monitor.selectedID == nil || $0.id == monitor.selectedID }) { sample in
-                    server(sample)
+                    .font(.system(size: 11)).foregroundColor(Paint.muted).fixedSize(horizontal: false, vertical: true)
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), alignment: .topLeading),
+                                         count: layout == .wide && monitor.selectedID == nil ? 2 : 1), spacing: 10) {
+                    ForEach(monitor.servers.filter { monitor.selectedID == nil || $0.id == monitor.selectedID }) { sample in
+                        server(sample)
+                    }
                 }
                 if let error = control.error { Text(error).foregroundColor(.orange).font(.system(size: 11)).fixedSize(horizontal: false, vertical: true) }
                 Text(L("Cowork Pro/Max computes in Anthropic's cloud. The VPS desktop connects your VPS files. Local Cowork requires KVM."))
@@ -156,9 +160,21 @@ struct AgentsView: View {
 
     private func server(_ sample: ServerSample) -> some View {
         let desktop = sample.document?.desktop
+        let available = sample.fresh && desktop?.available == true && sample.document?.maintenance != true
+        let status = !sample.fresh ? "Offline" : sample.document?.maintenance == true ? "Maintenance" :
+            desktop?.active == true ? (desktop?.phase == "ready" ? "Working" : "Waiting") : available ? "Ready" : "Unavailable"
         return VStack(alignment: .leading, spacing: 9) {
-            Text(sample.connection.name + " · " + sample.connection.team).font(.system(size: 12, weight: .semibold)).foregroundColor(Paint.ivory)
-            Text("Codex · ChatGPT  /  Claude Desktop · Cowork").font(.system(size: 11)).foregroundColor(Paint.green)
+            HStack(spacing: 7) {
+                DeviceIcon(glyph: .server, size: 19)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(sample.connection.name).font(.system(size: 13, weight: .bold, design: .monospaced)).foregroundColor(Paint.ivory)
+                    Text(sample.connection.team).font(.system(size: 10)).foregroundColor(Paint.muted)
+                }
+                Spacer(minLength: 4)
+                DeviceLamp(active: available, status: status)
+                Text(L(status)).font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundStyle(available ? Paint.green : Paint.orange)
+            }
             if desktop?.active == true {
                 Text(desktop?.provider == "claude" ? "Claude Desktop / Cowork" : "ChatGPT / Codex")
                     .font(.system(size: 11, weight: .medium)).foregroundColor(Paint.ivory)
@@ -195,16 +211,20 @@ struct AgentsView: View {
             } else {
                 Text(L("Start a one-hour desktop")).font(.system(size: 11))
                 HStack {
-                    Button("ChatGPT / Codex") { control.start(sample.connection, provider: "chatgpt") { monitor.refresh() } }
+                    Button { control.start(sample.connection, provider: "chatgpt") { monitor.refresh() } } label: {
+                        Label("ChatGPT / Codex", systemImage: "terminal")
+                    }
                         .accessibilityIdentifier("agents-chatgpt-" + sample.id)
-                    Button("Claude / Cowork") { control.start(sample.connection, provider: "claude") { monitor.refresh() } }
+                    Button { control.start(sample.connection, provider: "claude") { monitor.refresh() } } label: {
+                        Label("Claude / Cowork", systemImage: "sparkle")
+                    }
                         .accessibilityIdentifier("agents-claude-" + sample.id)
                 }.disabled(control.waiting != nil || sample.document?.maintenance == true)
                 Text(L("Uses a reserved share of the pool. Profiles and files persist; managed tools expire after 30 unused days."))
                     .font(.system(size: 10)).foregroundColor(Paint.muted).fixedSize(horizontal: false, vertical: true)
             }
         }.padding(12).frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 13).fill(.black.opacity(0.12)))
+            .lcdPanel().buttonStyle(DeviceButton())
     }
 }
 

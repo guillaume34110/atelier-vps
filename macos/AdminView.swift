@@ -7,11 +7,13 @@ struct AdminView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 HStack {
-                    Label(L("Administrator management"), systemImage: "gearshape")
-                        .font(.system(size: 15, weight: .semibold))
+                    DeviceIcon(glyph: .server, size: 20)
+                    Text(L("Administrator management"))
+                        .font(.system(size: 14, weight: .bold, design: .monospaced)).lineLimit(1).minimumScaleFactor(0.8)
                     Spacer(minLength: 4)
                     if admin.busy { ProgressView().controlSize(.small) }
-                }
+                    else { DeviceLamp(active: admin.authorized, status: admin.authorized ? "Connected" : "Offline") }
+                }.padding(9).lcdPanel()
                 Text(L("Applied mode: ") + L(admin.state?.policy.mode == "allocated" ? "Team" : "Solo"))
                     .font(.system(size: 11)).foregroundColor(Paint.muted)
                 if let metrics = admin.state?.overview {
@@ -27,17 +29,20 @@ struct AdminView: View {
                                 } else { Text(L(item.enabled ? "Offline" : "Disabled")).foregroundColor(Paint.muted) }
                             }
                         }
-                    }.font(.system(size: 11)).padding(12).background(card)
+                    }.font(.system(size: 11)).frame(maxWidth: .infinity, alignment: .leading).padding(12).lcdPanel()
                 }
-                Picker(L("Mode"), selection: Binding(get: { admin.draft.mode }, set: { admin.selectMode($0) })) {
-                    Text(L("Solo")).tag("opportunistic")
-                    Text(L("Team")).tag("allocated")
-                }.pickerStyle(.segmented).labelsHidden().accessibilityIdentifier("admin-mode")
+                HStack {
+                    modeButton("Solo", "opportunistic")
+                    modeButton("Team", "allocated")
+                }.accessibilityElement(children: .contain).accessibilityLabel(L("Mode")).accessibilityIdentifier("admin-mode")
                 Text(L("Solo lends all CPU and RAM to the owner. Other members are disabled; their files and disk quotas are kept."))
                     .font(.system(size: 11)).foregroundColor(Paint.muted).fixedSize(horizontal: false, vertical: true)
 
                 VStack(alignment: .leading, spacing: 10) {
-                    Text(L("Resource pool")).fontWeight(.semibold)
+                    HStack(spacing: 6) {
+                        DeviceIcon(glyph: .cpu)
+                        Text(L("Resource pool")).font(.system(size: 12, weight: .semibold, design: .monospaced))
+                    }
                     LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], alignment: .leading, spacing: 10) {
                         numberField("CPU (vCPU)", value: $admin.draft.pool.cpus)
                         numberField("RAM (GiB)", value: bytes($admin.draft.pool.ram_bytes))
@@ -52,7 +57,7 @@ struct AdminView: View {
                             Text(LF("Team RAM available now: %@ %@", gib(Double(available)), L("GiB")))
                         }
                     }
-                }.font(.system(size: 11)).padding(12).background(card)
+                }.font(.system(size: 11)).padding(12).lcdPanel()
 
                 HStack {
                     Text(L("Team members")).font(.system(size: 13, weight: .semibold))
@@ -94,7 +99,7 @@ struct AdminView: View {
                         Text(L("Active tasks block changes. Existing files are preserved. Deployment can take several minutes."))
                             .foregroundColor(Paint.muted)
                         Button(L("Apply verified changes")) { admin.apply() }
-                            .buttonStyle(.borderedProminent).tint(Paint.green).foregroundColor(.black)
+                            .buttonStyle(DeviceButton(selected: true))
                             .disabled(!admin.canApply).accessibilityIdentifier("admin-apply")
                     }.padding(12).background(card)
                 }
@@ -102,7 +107,7 @@ struct AdminView: View {
                 if admin.applying { Text(L("Applying settings… Keep the widget open.")).foregroundColor(Paint.green) }
             }
             .font(.system(size: 12)).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 4)
-            .disabled(admin.busy)
+            .buttonStyle(DeviceButton()).disabled(admin.busy)
         }
         .onChange(of: admin.draft) { _ in admin.plan = nil; admin.notice = nil }
         .onChange(of: admin.draft.pool.slots) { slots in
@@ -112,9 +117,18 @@ struct AdminView: View {
         }
     }
 
+    private func modeButton(_ title: String, _ mode: String) -> some View {
+        Button {
+            if admin.draft.mode != mode { admin.selectMode(mode) }
+        } label: {
+            Text(L(title)).frame(maxWidth: .infinity)
+        }.buttonStyle(DeviceButton(selected: admin.draft.mode == mode))
+            .accessibilityAddTraits(admin.draft.mode == mode ? .isSelected : [])
+    }
+
     private var card: some View {
-        RoundedRectangle(cornerRadius: 12).fill(.black.opacity(0.15))
-            .overlay(RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.10), lineWidth: 1))
+        RoundedRectangle(cornerRadius: 8).fill(Paint.background)
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Paint.violet.opacity(0.28)))
     }
 
     private var maxPoolSlots: Int {
@@ -126,7 +140,7 @@ struct AdminView: View {
         VStack(alignment: .leading, spacing: 4) {
             Text(L(label)).foregroundColor(Paint.muted)
             TextField(L(label), value: value, format: .number.precision(.fractionLength(0...3)))
-                .textFieldStyle(.roundedBorder).accessibilityLabel(L(label))
+                .deviceInput().accessibilityLabel(L(label))
         }
     }
 
@@ -145,7 +159,7 @@ struct AdminView: View {
             HStack {
                 Image(systemName: binding.wrappedValue.id == "owner" ? "crown" : "person")
                     .foregroundColor(Paint.ivory)
-                TextField(L("Member ID"), text: binding.id).textFieldStyle(.roundedBorder)
+                TextField(L("Member ID"), text: binding.id).deviceInput()
                     .disabled(existing).accessibilityLabel(L("Member ID"))
                 Toggle(L("Enabled"), isOn: Binding(get: { binding.wrappedValue.active }, set: { binding.wrappedValue.enabled = $0 }))
                     .toggleStyle(.switch).controlSize(.small)
@@ -161,7 +175,7 @@ struct AdminView: View {
             if binding.wrappedValue.id != "owner" {
                 DisclosureGroup(L("Advanced access")) {
                     TextField(L("SSH public key (ssh-ed25519…)"), text: Binding(get: { binding.wrappedValue.public_key ?? "" }, set: { binding.wrappedValue.public_key = $0 }))
-                        .textFieldStyle(.roundedBorder).font(.system(size: 10, design: .monospaced))
+                        .deviceInput()
                         .accessibilityLabel(L("SSH public key (ssh-ed25519…)"))
                 }
             }
@@ -175,8 +189,14 @@ struct AdminView: View {
         let cpu = active.reduce(0) { $0 + $1.cpu_percent }, ram = active.reduce(0) { $0 + $1.ram_percent }
         let disk = admin.draft.users.reduce(0) { $0 + $1.disk_percent }
         let slots = active.reduce(0) { $0 + $1.slots }
-        return Text(LF("Totals: CPU %.0f%% · RAM %.0f%% · disk %.0f%% · %d tasks", cpu, ram, disk, slots))
-            .font(.system(size: 10)).foregroundColor(cpu > 100 || ram > 100 || disk > 100 || slots > admin.draft.pool.slots ? .orange : Paint.muted)
-            .fixedSize(horizontal: false, vertical: true)
+        return VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 8) {
+                DeviceMeter(title: "CPU", value: percent(cpu / 100), fraction: cpu / 100, glyph: .cpu, small: true)
+                DeviceMeter(title: "RAM", value: percent(ram / 100), fraction: ram / 100, glyph: .ram, small: true)
+                DeviceMeter(title: L("Disk"), value: percent(disk / 100), fraction: disk / 100, glyph: .disk, small: true)
+            }
+            Text(LF("%d / %d tasks", slots, admin.draft.pool.slots))
+                .font(.system(size: 10, design: .monospaced)).foregroundStyle(slots > admin.draft.pool.slots ? Paint.orange : Paint.muted)
+        }.padding(10).lcdPanel()
     }
 }

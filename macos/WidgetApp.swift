@@ -21,12 +21,123 @@ enum Configuration {
 }
 
 enum Paint {
-    static let background = Color(red: 0.075, green: 0.10, blue: 0.087)
-    static let panel = Color(red: 0.13, green: 0.17, blue: 0.145)
-    static let green = Color(red: 0.66, green: 0.88, blue: 0.60)
-    static let ivory = Color(red: 0.94, green: 0.88, blue: 0.74)
-    static let orange = Color(red: 0.96, green: 0.35, blue: 0.20)
-    static let muted = Color(red: 0.64, green: 0.69, blue: 0.65)
+    static let background = Color(red: 0.055, green: 0.039, blue: 0.085)
+    static let panel = Color(red: 0.15, green: 0.11, blue: 0.21)
+    static let green = Color(red: 0.72, green: 0.93, blue: 0.79)
+    static let ivory = Color(red: 0.94, green: 0.90, blue: 0.99)
+    static let orange = Color(red: 1, green: 0.70, blue: 0.42)
+    static let muted = Color(red: 0.77, green: 0.70, blue: 0.83)
+    static let violet = Color(red: 0.74, green: 0.53, blue: 0.98)
+    static let ectoplasma = Bundle.main.url(forResource: "ectoplasma", withExtension: "jpg")
+        .flatMap { NSImage(contentsOf: $0) }
+    static let faceplate = Bundle.main.url(forResource: "ectoplasma-faceplate", withExtension: "jpg")
+        .flatMap { NSImage(contentsOf: $0) }
+}
+
+struct DeviceButton: ButtonStyle {
+    var selected = false
+    @Environment(\.isEnabled) private var enabled
+    func makeBody(configuration: ButtonStyleConfiguration) -> some View {
+        configuration.label.padding(.horizontal, 9).padding(.vertical, 6)
+            .font(.system(size: 11, weight: .semibold, design: .monospaced))
+            .foregroundStyle(selected ? Paint.green : Paint.ivory)
+            .background(RoundedRectangle(cornerRadius: 5).fill(
+                LinearGradient(colors: configuration.isPressed || selected ? [Paint.background, Paint.background] :
+                    [Paint.violet.opacity(0.38), Paint.panel, Paint.background], startPoint: .top, endPoint: .bottom)))
+            .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(selected ? Paint.violet : Paint.violet.opacity(0.38)))
+            .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 6))
+            .shadow(color: .black.opacity(0.75), radius: 1, y: configuration.isPressed ? 0 : 2)
+            .opacity(enabled ? 1 : 0.48)
+    }
+}
+
+enum DeviceGlyph: String, CaseIterable {
+    case cpu, ram, gpu, disk, server, battery, expand, options
+
+    static let artwork: [Self: NSImage] = Dictionary(uniqueKeysWithValues: allCases.compactMap { glyph in
+        guard let url = Bundle.main.url(forResource: "ectoplasma-\(glyph.rawValue)", withExtension: "png"),
+              let image = NSImage(contentsOf: url) else { return nil }
+        return (glyph, image)
+    })
+}
+
+struct DeviceIcon: View {
+    let glyph: DeviceGlyph
+    var size: CGFloat = 13
+
+    var body: some View {
+        if let artwork = DeviceGlyph.artwork[glyph] {
+            Image(nsImage: artwork).resizable().interpolation(.high).scaledToFit()
+                .frame(width: size, height: size).accessibilityHidden(true)
+        }
+    }
+}
+
+extension View {
+    func lcdPanel() -> some View {
+        background {
+            RoundedRectangle(cornerRadius: 8).fill(
+                LinearGradient(colors: [.black.opacity(0.76), Paint.background, Paint.background],
+                               startPoint: .top, endPoint: .bottom))
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 8).strokeBorder(
+                LinearGradient(colors: [Paint.violet.opacity(0.44), Paint.panel, Paint.violet.opacity(0.20)],
+                               startPoint: .topLeading, endPoint: .bottomTrailing)).allowsHitTesting(false)
+        }
+    }
+
+    func deviceInput() -> some View {
+        textFieldStyle(.plain).font(.system(size: 12, weight: .medium, design: .monospaced))
+            .foregroundStyle(Paint.green).padding(7).lcdPanel()
+    }
+
+    func deviceChassis(radius: CGFloat) -> some View {
+        background(LinearGradient(colors: [Paint.panel, Paint.background, Paint.panel, Paint.background],
+                                  startPoint: .topLeading, endPoint: .bottomTrailing))
+            .clipShape(RoundedRectangle(cornerRadius: radius))
+            .overlay {
+                ZStack {
+                    RoundedRectangle(cornerRadius: radius).strokeBorder(
+                        LinearGradient(colors: [Paint.violet.opacity(0.8), Paint.panel, Paint.violet.opacity(0.5)],
+                                       startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 2)
+                    RoundedRectangle(cornerRadius: radius - 4).strokeBorder(.black.opacity(0.85), lineWidth: 2).padding(4)
+                    VStack {
+                        hardwareRail
+                        Spacer(minLength: 0)
+                        hardwareRail
+                    }.padding(5)
+                }.allowsHitTesting(false).accessibilityHidden(true)
+            }
+    }
+
+    private var hardwareRail: some View {
+        HStack {
+            CaseFastener()
+            Spacer(minLength: 0)
+            CaseFastener()
+        }
+    }
+}
+
+private struct CaseFastener: View {
+    var body: some View {
+        Circle().fill(Paint.panel).overlay(Circle().strokeBorder(Paint.violet.opacity(0.55)))
+            .frame(width: 6, height: 6)
+            .overlay(Rectangle().fill(.black.opacity(0.9)).frame(width: 3.5, height: 1).rotationEffect(.degrees(35)))
+    }
+}
+
+struct DeviceLamp: View {
+    let active: Bool
+    let status: String
+    var size: CGFloat = 6
+
+    var body: some View {
+        Circle().fill(active ? Paint.green : Paint.orange)
+            .shadow(color: (active ? Paint.green : Paint.orange).opacity(0.55), radius: 3)
+            .frame(width: size, height: size).accessibilityLabel(L(status))
+    }
 }
 
 final class Monitor: ObservableObject {
@@ -41,13 +152,14 @@ final class Monitor: ObservableObject {
     @Published var servers: [ServerSample] = []
     @Published var selectedID: String?
     @Published var showingAgents = false
+    @Published var showingMac = CommandLine.arguments.contains("--mac-performance")
+    @Published private(set) var visible = true
     let agents = RemoteAgentsControl()
     var onUpdate: (() -> Void)?
     var successfulSamples = 0
     var raw = Data()
     private var process: Process?
     private var timer: Timer?
-    private var visible = true
     private var queue: [String] = []
     private var retryCount: [String: Int] = [:]
     private var nextSample: [String: Date] = [:]
@@ -269,7 +381,7 @@ private struct GaugeFace: View, Animatable {
     }
 }
 
-private struct Dial: View {
+struct Dial: View {
     let title: String
     let value: String
     let fraction: Double?
@@ -283,7 +395,7 @@ private struct Dial: View {
                 .animation(.easeInOut(duration: 0.8), value: fraction)
             Text(title).font(.system(size: 11, weight: .bold)).tracking(1.2)
             Text(value).font(.system(size: compact ? 18 : 20, weight: .semibold, design: .rounded)).monospacedDigit()
-            Text(detail).font(.system(size: 9, design: .monospaced)).foregroundColor(Paint.muted).lineLimit(1)
+            Text(detail).font(.system(size: 9, design: .monospaced)).foregroundColor(Paint.muted).lineLimit(1).minimumScaleFactor(0.8)
         }
         .padding(.horizontal, 8).padding(.bottom, 8)
         .frame(maxWidth: .infinity)
@@ -295,19 +407,24 @@ private struct Dial: View {
 struct Collapsible<Content: View>: View {
     let title: String
     let key: String
+    let glyph: DeviceGlyph?
     let content: Content
     @State private var expanded: Bool
 
-    init(_ title: String, key: String, @ViewBuilder content: () -> Content) {
-        self.title = title; self.key = key; self.content = content()
-        _expanded = State(initialValue: CommandLine.arguments.contains("--capture") ? true : UserDefaults.standard.object(forKey: key) as? Bool ?? true)
+    init(_ title: String, key: String, initiallyExpanded: Bool = true, glyph: DeviceGlyph? = nil, @ViewBuilder content: () -> Content) {
+        self.title = title; self.key = key; self.glyph = glyph; self.content = content()
+        _expanded = State(initialValue: CommandLine.arguments.contains("--capture") ? initiallyExpanded :
+            UserDefaults.standard.object(forKey: key) as? Bool ?? initiallyExpanded)
     }
     var body: some View {
         DisclosureGroup(isExpanded: $expanded) { content.padding(.top, 8) } label: {
-            Text(L(title)).font(.system(size: 11, weight: .semibold)).foregroundColor(Paint.ivory)
+            HStack(spacing: 5) {
+                if let glyph { DeviceIcon(glyph: glyph) }
+                Text(L(title)).font(.system(size: 11, weight: .semibold, design: .monospaced)).foregroundColor(Paint.ivory)
+            }
         }
         .onChange(of: expanded) { UserDefaults.standard.set(expanded, forKey: key) }
-        .padding(12).background(RoundedRectangle(cornerRadius: 13).fill(.black.opacity(0.12)))
+        .padding(12).lcdPanel()
         .tint(Paint.green)
     }
 }
@@ -329,30 +446,37 @@ private struct WidgetView: View {
     var body: some View {
         VStack(spacing: 10) {
             HStack(spacing: 8) {
-                Image(systemName: "gauge.with.dots.needle.67percent").foregroundColor(Paint.ivory)
-                Text("Atelier VPS").font(.system(size: 20, weight: .bold, design: .rounded)).lineLimit(1).minimumScaleFactor(0.9)
+                if let artwork = Paint.ectoplasma {
+                    Image(nsImage: artwork).resizable().scaledToFill().frame(width: 37, height: 37)
+                        .clipShape(RoundedRectangle(cornerRadius: 5)).accessibilityHidden(true)
+                }
+                Text("Atelier VPS").font(.system(size: 17, weight: .bold, design: .monospaced)).lineLimit(1).minimumScaleFactor(0.78)
                 Spacer(minLength: 4)
-                Circle().fill(tint).frame(width: 7, height: 7).help(L(monitor.connected ? "Connected" : "Offline"))
-                    .accessibilityLabel(L(monitor.connected ? "Connected" : "Offline"))
+                if !monitor.showingMac {
+                    Circle().fill(tint).frame(width: 7, height: 7).help(L(monitor.connected ? "Connected" : "Offline"))
+                        .accessibilityLabel(L(monitor.connected ? "Connected" : "Offline"))
+                }
                 Button(action: compact) { Image(systemName: "rectangle.compress.vertical") }
                     .help(L("Mini bar")).accessibilityLabel(L("Mini bar")).accessibilityIdentifier("widget-mini")
-                Button(action: { monitor.refresh() }) { Image(systemName: "arrow.clockwise") }
-                    .help(L("Refresh")).accessibilityLabel(L("Refresh"))
+                if !monitor.showingMac {
+                    Button(action: { monitor.refresh() }) { Image(systemName: "arrow.clockwise") }
+                        .help(L("Refresh")).accessibilityLabel(L("Refresh"))
+                }
                 Button(action: menu) { Image(systemName: "ellipsis") }.help(L("Options")).accessibilityLabel(L("Options"))
                 Button(action: hide) { Image(systemName: "chevron.down") }.help(L("Hide widget")).accessibilityLabel(L("Hide widget"))
-            }.buttonStyle(.plain)
-            HStack(spacing: 0) { Color(red: 0.20, green: 0.36, blue: 0.72); Paint.ivory; Paint.orange }
-                .frame(height: 2).clipShape(Capsule())
-            FleetPicker(monitor: monitor, admin: admin)
-            Picker(L("Widget section"), selection: Binding(get: {
-                monitor.showingAgents ? 1 : admin.authorized && admin.showingManagement ? 2 : 0
-            }, set: { value in monitor.showingAgents = value == 1; admin.showingManagement = value == 2 })) {
-                Text(L("Monitoring")).tag(0)
-                Text(L("Agents")).tag(1)
-                if admin.authorized { Text(L("Management")).tag(2) }
-            }.pickerStyle(.segmented).labelsHidden().accessibilityIdentifier("widget-section")
-            if monitor.showingAgents {
-                AgentsView(monitor: monitor, control: monitor.agents)
+            }.padding(.horizontal, 8).padding(.vertical, 5).lcdPanel().buttonStyle(DeviceButton())
+            Rectangle().fill(Paint.violet.opacity(0.5)).frame(height: 1)
+            if !monitor.showingMac { FleetPicker(monitor: monitor, admin: admin) }
+            HStack(spacing: 5) {
+                sectionButton(monitor.selectedID == nil ? "Global" : "Monitoring", 0)
+                sectionButton("Mac", 3)
+                sectionButton("Agents", 1)
+                if admin.authorized { sectionButton("Management", 2) }
+            }.accessibilityElement(children: .contain).accessibilityIdentifier("widget-section")
+            if monitor.showingMac {
+                MacPerformanceView(layout: layout, visible: monitor.visible)
+            } else if monitor.showingAgents {
+                AgentsView(layout: layout, monitor: monitor, control: monitor.agents)
             } else if admin.authorized && admin.showingManagement {
                 if monitor.selectedID == nil && monitor.servers.count > 1 {
                     VStack(alignment: .leading, spacing: 12) {
@@ -371,7 +495,11 @@ private struct WidgetView: View {
             }.font(.system(size: 10)).foregroundColor(Paint.muted)
             ScrollView {
                 VStack(spacing: 10) {
-                    Collapsible("Resources", key: profile + ".resources") {
+                    if monitor.selectedID == nil {
+                        MacPerformanceView(layout: layout, visible: monitor.visible, embedded: true)
+                        FleetServerList(monitor: monitor, admin: admin)
+                    }
+                    Collapsible("Resources", key: profile + ".resources", glyph: .server) {
                         HStack(spacing: 8) {
                             Dial(title: L("YOUR CPU"), value: percent(monitor.cpu.worker), fraction: monitor.cpu.worker,
                                  detail: LF("Limit %.2f vCPU", snapshot?.telemetry?.worker_cpu_limit ?? Double(snapshot?.pool?.cpu_total ?? 0)), compact: layout == .compact)
@@ -391,7 +519,6 @@ private struct WidgetView: View {
                             Text(LF("Free: %@ %@", gib(snapshot?.workspace_free_bytes), unit)).foregroundColor(Paint.muted)
                         }.font(.system(size: 11)).frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    if monitor.selectedID == nil { FleetServerList(monitor: monitor, admin: admin) }
                     if layout == .wide {
                         HStack(alignment: .top, spacing: 10) {
                             agentsSection.frame(maxWidth: .infinity)
@@ -405,21 +532,34 @@ private struct WidgetView: View {
                 }.id(profile)
             }
             }
-            HStack {
-                Text(freshness).lineLimit(1)
-                Spacer(minLength: 4)
-                Button(action: { NSWorkspace.shared.open(Configuration.dashboard) }) {
-                    Image(systemName: "arrow.up.right.square")
-                }.buttonStyle(.plain).help(L("Dashboard")).accessibilityLabel(L("Dashboard"))
-            }.font(.system(size: 10)).foregroundColor(monitor.connected ? Paint.muted : .orange)
+            if !monitor.showingMac {
+                HStack {
+                    Text(freshness).lineLimit(1)
+                    Spacer(minLength: 4)
+                    Button(action: { NSWorkspace.shared.open(Configuration.dashboard) }) {
+                        Image(systemName: "arrow.up.right.square")
+                    }.buttonStyle(.plain).help(L("Dashboard")).accessibilityLabel(L("Dashboard"))
+                }.font(.system(size: 10, design: .monospaced)).foregroundColor(monitor.connected ? Paint.muted : .orange)
+                    .padding(.horizontal, 8).padding(.vertical, 4).lcdPanel()
+            }
         }
         .padding(14).frame(minWidth: 340, idealWidth: 480, maxWidth: .infinity, minHeight: 220, idealHeight: 640, maxHeight: .infinity)
         .foregroundColor(.white.opacity(0.92))
-        .background(LinearGradient(colors: [Paint.panel, Paint.background], startPoint: .topLeading, endPoint: .bottomTrailing))
-        .clipShape(RoundedRectangle(cornerRadius: 18))
-        .overlay(RoundedRectangle(cornerRadius: 18).stroke(.white.opacity(0.17), lineWidth: 1))
+        .deviceChassis(radius: 18)
         .preferredColorScheme(.dark).environment(\.locale, Locale(identifier: UILanguage.code)).id(language)
         .sheet(item: $failures.selected) { activity in FailureDetailView(activity: activity, details: failures) }
+    }
+    private func sectionButton(_ title: String, _ section: Int) -> some View {
+        let current = monitor.showingMac ? 3 : monitor.showingAgents ? 1 : admin.authorized && admin.showingManagement ? 2 : 0
+        return Button {
+            monitor.showingMac = section == 3
+            monitor.showingAgents = section == 1
+            admin.showingManagement = section == 2
+        } label: {
+            Text(L(title)).font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .lineLimit(1).minimumScaleFactor(0.74).frame(maxWidth: .infinity)
+        }.buttonStyle(DeviceButton(selected: current == section))
+            .accessibilityAddTraits(current == section ? .isSelected : [])
     }
     private var agentsSection: some View {
         Collapsible("Connected agents", key: profile + ".tasks") {
@@ -511,68 +651,82 @@ private struct WidgetView: View {
 
 private struct MiniWidget: View {
     @ObservedObject var monitor: Monitor
+    let size: CGSize
     let expand: () -> Void
     let menu: () -> Void
     @AppStorage("atelier-language") private var language = "system"
+    private var dense: Bool { size.height < 115 || size.width < 385 }
+    private var expandedReadout: Bool { size.height >= 160 && size.width >= 480 }
+    private var snapshot: VPSSnapshot? { monitor.connected ? monitor.document : nil }
 
-    private var snapshot: VPSSnapshot? { monitor.document }
     var body: some View {
-        VStack(spacing: 6) {
-            HStack(spacing: 6) {
-                Circle().fill(monitor.connected ? Paint.green : .orange).frame(width: 6, height: 6)
-                    .accessibilityLabel(L(monitor.connected ? "Connected" : "Offline"))
-                Text("Atelier VPS").font(.system(size: 11, weight: .semibold))
-                Text(L(snapshot?.scope?.mode == "allocated" ? "Team" : "Solo"))
-                    .font(.system(size: 9)).foregroundColor(Paint.ivory)
-                Spacer(minLength: 2)
-                Text(LF("Disk free: %@ %@", gib(snapshot?.workspace_free_bytes), L("GiB")))
-                    .font(.system(size: 9)).foregroundColor(Paint.muted).lineLimit(1)
-                Button(action: expand) { Image(systemName: "arrow.up.left.and.arrow.down.right") }
-                    .help(L("Expand widget")).accessibilityLabel(L("Expand widget"))
-                    .accessibilityIdentifier("widget-expand")
-                Button(action: menu) { Image(systemName: "ellipsis") }
-                    .help(L("Options")).accessibilityLabel(L("Options"))
-            }.buttonStyle(.plain)
-            HStack(spacing: 10) {
-                metric("CPU", percent(monitor.cpu.worker), monitor.cpu.worker)
-                metric(L("Reservable"), gib(snapshot?.pool?.ram_available) + " " + L("GiB"), snapshot?.ramUsageFraction)
-                metric(L("Committed"), gib(snapshot?.pool?.ram_reserved) + " " + L("GiB"), nil)
-                metric(L("Tasks"), "\(snapshot?.agents.count ?? 0)/\(snapshot?.pool?.max_jobs ?? 4)", Double(snapshot?.agents.count ?? 0) / Double(snapshot?.pool?.max_jobs ?? 4))
-            }.opacity(monitor.connected ? 1 : 0.45)
-            HStack(spacing: 4) {
-                Text(LF("%d agents", snapshot?.connectedAgents.count ?? 0))
-                Spacer(minLength: 2)
-                Image(systemName: "arrow.up.right")
-                Text("\(snapshot?.activeTransfers.filter { $0.direction == "upload" }.count ?? 0)")
-                Image(systemName: "arrow.down.left")
-                Text("\(snapshot?.activeTransfers.filter { $0.direction == "download" }.count ?? 0)")
-            }.font(.system(size: 9)).monospacedDigit().foregroundColor(Paint.muted)
-                .opacity(monitor.connected ? 1 : 0.45)
-            if !monitor.connected || snapshot?.maintenance == true {
-                Text(L(monitor.connected ? "Maintenance" : "Offline · values may be stale"))
-                    .font(.system(size: 9)).foregroundColor(.orange)
+        HStack(spacing: 6) {
+            if let artwork = Paint.faceplate {
+                Image(nsImage: artwork).resizable().scaledToFill()
+                    .frame(width: dense ? 49 : 66, height: max(1, size.height - 14))
+                    .clipped().clipShape(RoundedRectangle(cornerRadius: 7))
+                    .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Paint.violet.opacity(0.55)))
+                    .accessibilityHidden(true)
             }
+            VStack(spacing: 4) {
+                HStack(spacing: 5) {
+                    Text("Atelier VPS").font(.system(size: dense ? 10 : 12, weight: .bold, design: .monospaced))
+                    Text("MAC").font(.system(size: 9, weight: .medium, design: .monospaced))
+                        .foregroundStyle(Paint.violet).padding(.horizontal, 4).padding(.vertical, 1).lcdPanel()
+                    Spacer(minLength: 0)
+                    Button(action: expand) { DeviceIcon(glyph: .expand) }
+                        .help(L("Expand widget")).accessibilityLabel(L("Expand widget"))
+                        .accessibilityIdentifier("widget-expand")
+                    Button(action: menu) { DeviceIcon(glyph: .options) }
+                        .help(L("Options")).accessibilityLabel(L("Options"))
+                }.buttonStyle(DeviceButton()).font(.system(size: 9, weight: .semibold)).lineLimit(1)
+                MiniMacPerformance(visible: monitor.visible, dense: dense, expandedReadout: expandedReadout)
+                    .padding(.horizontal, 5).padding(.vertical, 3).lcdPanel()
+                remoteDisplay
+            }.frame(maxWidth: .infinity)
         }
-        .padding(10).frame(maxWidth: .infinity, maxHeight: .infinity)
-        .foregroundColor(.white.opacity(0.92)).background(Paint.background)
-        .overlay(alignment: .top) {
-            HStack(spacing: 0) { Color(red: 0.20, green: 0.36, blue: 0.72); Paint.ivory; Paint.orange }
-                .frame(width: 30, height: 2)
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Paint.green.opacity(0.3), lineWidth: 1))
+        .padding(7).frame(maxWidth: .infinity, maxHeight: .infinity)
+        .foregroundStyle(Paint.ivory)
+        .deviceChassis(radius: 12)
         .preferredColorScheme(.dark).environment(\.locale, Locale(identifier: UILanguage.code)).id(language)
     }
 
-    private func metric(_ title: String, _ value: String, _ fraction: Double?) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(title).font(.system(size: 9)).foregroundColor(Paint.muted).lineLimit(1)
-            Text(value).font(.system(size: 12, weight: .semibold, design: .rounded))
-                .monospacedDigit().lineLimit(1).minimumScaleFactor(0.85)
-            ProgressView(value: min(1, max(0, fraction ?? 0))).tint(Paint.green)
-                .controlSize(.mini).opacity(fraction == nil ? 0 : 1)
-        }.frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityElement(children: .combine)
+    private var remoteDisplay: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                DeviceIcon(glyph: .server, size: 12)
+                Circle().fill(monitor.connected ? Paint.green : Paint.orange).frame(width: 5, height: 5)
+                    .accessibilityLabel(L(monitor.connected ? "Connected" : "Offline"))
+                Text("VPS").foregroundStyle(Paint.violet).fontWeight(.bold)
+                Text(remoteSummary)
+                Spacer(minLength: 0)
+            }
+            if let snapshot, expandedReadout {
+                Text(remoteDetail(snapshot)).foregroundStyle(snapshot.maintenance == true ? Paint.orange : Paint.muted)
+            }
+        }.font(.system(size: expandedReadout ? 9 : 8, weight: .medium, design: .monospaced))
+            .monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
+            .padding(.horizontal, 5).padding(.vertical, 3).lcdPanel()
+    }
+
+    private var remoteSummary: String {
+        guard let snapshot else { return L("Offline") }
+        let unit = L("GiB")
+        let cpu = "CPU " + percent(monitor.cpu.worker)
+        let ram = "RAM " + gib(snapshot.pool?.ram_available) + " " + unit
+        let disk = L("Disk") + " " + gib(snapshot.diskReservable) + " " + unit
+        let fields = expandedReadout ? [cpu, ram, disk] : [cpu, ram, disk, LF("%d agents", snapshot.connectedAgents.count)]
+        return fields.joined(separator: "  ·  ")
+    }
+
+    private func remoteDetail(_ snapshot: VPSSnapshot) -> String {
+        let uploads = snapshot.activeTransfers.filter { $0.direction == "upload" }.count
+        let downloads = snapshot.activeTransfers.filter { $0.direction == "download" }.count
+        var readings = [LF("Committed: %@ %@ RAM", gib(snapshot.pool?.ram_reserved), L("GiB")),
+                        LF("%d / %d tasks", snapshot.agents.count, snapshot.pool?.max_jobs ?? 0),
+                        LF("%d agents", snapshot.connectedAgents.count), "↑\(uploads) ↓\(downloads)"]
+        if snapshot.maintenance == true { readings.append(L("Maintenance")) }
+        return readings.joined(separator: "  ·  ")
     }
 }
 
@@ -588,7 +742,7 @@ private struct WidgetRoot: View {
         GeometryReader { geometry in
             let layout = WidgetLayout.resolve(width: geometry.size.width, height: geometry.size.height)
             if layout == .mini {
-                MiniWidget(monitor: monitor, expand: compact, menu: menu)
+                MiniWidget(monitor: monitor, size: geometry.size, expand: compact, menu: menu)
             } else {
                 WidgetView(layout: layout, monitor: monitor, admin: admin, failures: failures, hide: hide, menu: menu, compact: compact)
             }
@@ -632,6 +786,7 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         panel.hasShadow = true
         panel.hidesOnDeactivate = false
         panel.isMovableByWindowBackground = true
+        panel.ignoresMouseEvents = CommandLine.arguments.contains("--capture")
         panel.level = .floating
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         if !panel.setFrameUsingName("usevps-widget") {
@@ -651,7 +806,8 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         statusItem.button?.toolTip = L("Show widget")
         statusItem.button?.target = self
         statusItem.button?.action = #selector(toggle)
-        if UserDefaults.standard.bool(forKey: "atelier-mini"), !CommandLine.arguments.contains("--capture") { setCompact(true) }
+        if !CommandLine.arguments.contains("--capture"),
+           CommandLine.arguments.contains("--mini") || UserDefaults.standard.bool(forKey: "atelier-mini") { setCompact(true) }
         panel.orderFrontRegardless()
         monitor.onUpdate = { [weak self] in
             guard let self = self else { return }
@@ -685,7 +841,13 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if value {
             fullFrame = panel.frame
             monitor.compact = true
-            panel.setContentSize(NSSize(width: 400, height: 96))
+            let screen = panel.screen?.visibleFrame
+            panel.setContentSize(NSSize(width: min(420, screen?.width ?? 420), height: 128))
+            if let screen {
+                let frame = panel.frame
+                panel.setFrameOrigin(NSPoint(x: min(max(frame.minX, screen.minX), screen.maxX - frame.width),
+                                             y: min(max(frame.minY, screen.minY), screen.maxY - frame.height)))
+            }
         } else {
             monitor.compact = false
             if let frame = fullFrame { panel.setFrame(frame, display: true) }
@@ -822,8 +984,8 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             pin(item); precondition(panel.level == before)
             let original = panel.frame
             setCompact(true)
-            guard monitor.compact && panel.frame.height == 96 else {
-                fputs("Mini resize failed: expected 96, actual \(panel.frame)\n", stderr); exit(1)
+            guard monitor.compact && panel.frame.height == 128 else {
+                fputs("Mini resize failed: expected 128, actual \(panel.frame)\n", stderr); exit(1)
             }
             setCompact(false)
             guard !monitor.compact && panel.frame == original else {
@@ -839,7 +1001,7 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             panel.setFrame(original, display: true)
             refresh(); precondition(monitor.refreshing)
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [self] in
             do {
                 let path = URL(fileURLWithPath: CommandLine.arguments[index + 1])
                 guard let workspace = ProcessInfo.processInfo.environment["TASK_WORKSPACE"],
@@ -848,14 +1010,14 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                       let view = panel.contentView,
                       let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { throw MonitorError.invalidData }
                 view.cacheDisplay(in: view.bounds, to: bitmap)
-                let facePixels = meterFacePixels(bitmap)
-                guard facePixels >= 1000 else { throw MonitorError.invalidData }
+                let accentPixels = deviceAccentPixels(bitmap)
+                guard accentPixels >= 200 else { throw MonitorError.invalidData }
                 guard let png = bitmap.representation(using: .png, properties: [:]) else { throw MonitorError.invalidData }
                 try png.write(to: path, options: .withoutOverwriting)
                 let evidence: [String: Any] = ["source": "real restricted SSH", "samples": monitor.successfulSamples,
                     "connected": monitor.connected, "cpu_fraction": monitor.cpu.worker.map { $0 as Any } ?? NSNull(),
                     "ram_fraction": monitor.document?.ramUsageFraction.map { $0 as Any } ?? NSNull(),
-                    "meter_face_pixels": facePixels,
+                    "device_accent_pixels": accentPixels,
                     "bundle": Bundle.main.bundlePath, "window_width": view.bounds.width, "window_height": view.bounds.height,
                     "controls_exercised": CommandLine.arguments.contains("--exercise-controls"),
                     "automatic_breakpoints_exercised": CommandLine.arguments.contains("--exercise-controls"),
@@ -881,6 +1043,20 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 if let c = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
                    c.alphaComponent > 0.5, c.redComponent > 0.8, c.greenComponent > 0.7,
                    c.blueComponent > 0.45, c.blueComponent < 0.86, c.redComponent - c.blueComponent > 0.08 {
+                    count += 1
+                }
+            }
+        }
+        return count
+    }
+
+    private func deviceAccentPixels(_ bitmap: NSBitmapImageRep) -> Int {
+        var count = 0
+        for y in stride(from: 0, to: bitmap.pixelsHigh, by: 2) {
+            for x in stride(from: 0, to: min(bitmap.pixelsWide, 220), by: 2) {
+                if let c = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
+                   c.alphaComponent > 0.5, c.blueComponent > 0.48,
+                   c.blueComponent - c.greenComponent > 0.18, c.redComponent > 0.23 {
                     count += 1
                 }
             }
@@ -931,7 +1107,7 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             ("narrow", 360, 600, false, false), ("standard", 480, 640, false, false),
             ("wide", 720, 800, false, false), ("short", 360, 300, false, false),
             ("mini-small", 340, 96, true, false), ("mini", 400, 96, true, false),
-            ("mini-wide", 600, 96, true, false),
+            ("mini-wide", 600, 96, true, false), ("mini-device", 420, 128, true, false),
             ("compact-edge", 439, 760, false, false), ("standard-edge", 440, 760, false, false),
             ("column-before", 699, 800, false, false), ("column-after", 700, 800, false, false),
             ("auto-mini", 480, 219, true, false), ("auto-full", 480, 220, false, false)]
@@ -939,7 +1115,9 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             layouts += [("admin-narrow", 360, 620, false, true), ("admin", 480, 740, false, true),
                         ("admin-wide", 720, 800, false, true)]
         }
-        layouts += [("agents-narrow", 360, 640, false, false), ("agents-wide", 720, 720, false, false)]
+        layouts += [("agents-narrow", 360, 640, false, false), ("agents-wide", 720, 720, false, false),
+                    ("mac-narrow", 360, 640, false, false), ("mac-wide", 720, 720, false, false),
+                    ("server", 480, 640, false, false)]
         let originalFrame = panel.frame, originalPolicy = administration.draft
         var evidence: [[String: Any]] = []
         func next(_ index: Int) {
@@ -949,13 +1127,23 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                         .write(to: path.deletingLastPathComponent().appendingPathComponent("widget-layouts.json"), options: .withoutOverwriting)
                     setCompact(false); panel.setFrame(originalFrame, display: true)
                     monitor.showingAgents = false
+                    monitor.showingMac = false
+                    monitor.select(nil)
                     administration.showingManagement = false; administration.draft = originalPolicy
                     if CommandLine.arguments.contains("--exit-after-capture") { quit() }
                 } catch { fputs("Layout receipt failed: \(error)\n", stderr); exit(1) }
                 return
             }
             let (name, width, height, mini, admin) = layouts[index]
+            if admin {
+                monitor.select(administration.connectionID)
+            } else if name == "server" {
+                monitor.select(countedServers(monitor.servers).first?.id)
+            } else if monitor.selectedID != nil {
+                monitor.select(nil)
+            }
             let agents = name.hasPrefix("agents-")
+            monitor.showingMac = name.hasPrefix("mac-")
             monitor.showingAgents = agents
             administration.showingManagement = admin
             if CommandLine.arguments.contains("--capture-mac-worker"),
@@ -966,7 +1154,7 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             }
             if admin { administration.selectMode("allocated") }
             panel.setContentSize(NSSize(width: width, height: height))
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [self] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + (name == "mac-narrow" || name == "mini-device" ? 2.5 : 0.3)) { [self] in
                 do {
                     guard let view = panel.contentView else { throw MonitorError.invalidData }
                     let macFixture = CommandLine.arguments.contains("--capture-mac-worker") &&
@@ -979,7 +1167,9 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { throw MonitorError.invalidData }
                     view.cacheDisplay(in: view.bounds, to: bitmap)
                     let facePixels = meterFacePixels(bitmap)
-                    if !mini && !admin && !agents && height >= 500 { precondition(facePixels >= 1000) }
+                    let accentPixels = deviceAccentPixels(bitmap)
+                    if name.hasPrefix("mac-") || name == "server" { precondition(facePixels >= 1000) }
+                    if name == "mini-device" { precondition(accentPixels >= 1000) }
                     guard let png = bitmap.representation(using: .png, properties: [:]) else { throw MonitorError.invalidData }
                     let image = path.deletingLastPathComponent().appendingPathComponent("widget-\(name).png")
                     try png.write(to: image, options: .withoutOverwriting)
@@ -989,6 +1179,7 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                                      "mac_fixture": macFixture,
                                      "resolved_layout": WidgetLayout.resolve(width: width, height: height).rawValue,
                                      "meter_face_pixels": facePixels,
+                                     "device_accent_pixels": accentPixels,
                                      "server_mode": monitor.document?.scope?.mode ?? "unknown", "settings_applied": false])
                     next(index + 1)
                 } catch { fputs("Layout capture failed: \(error)\n", stderr); exit(1) }
@@ -1002,7 +1193,8 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 struct WidgetMain {
     static func main() {
         if CommandLine.arguments.contains("--self-test") {
-            do { try runModelChecks(); try runFleetChecks(); try runAgentChecks(); try runAdminChecks(); try runFailureChecks() } catch { fputs("Mac model checks failed: \(error)\n", stderr); exit(1) }
+            precondition(Paint.faceplate != nil && DeviceGlyph.artwork.count == DeviceGlyph.allCases.count)
+            do { try runModelChecks(); try runFleetChecks(); try runAgentChecks(); try runAdminChecks(); try runFailureChecks(); runMacPerformanceChecks() } catch { fputs("Mac model checks failed: \(error)\n", stderr); exit(1) }
             return
         }
         let application = NSApplication.shared

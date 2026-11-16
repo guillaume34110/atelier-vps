@@ -7,16 +7,29 @@ struct FleetPicker: View {
     @State private var adding = false
 
     var body: some View {
-        HStack {
-            Picker(L("Server"), selection: Binding(get: { monitor.selectedID ?? "" }, set: { monitor.select($0.isEmpty ? nil : $0) })) {
-                Text(L("Global")).tag("")
-                ForEach(monitor.servers) { sample in Text(sample.connection.name + " · " + sample.connection.team).tag(sample.id) }
-            }.labelsHidden().disabled(admin.busy).accessibilityIdentifier("server-selection")
+        HStack(spacing: 8) {
+            DeviceIcon(glyph: .server, size: 16)
+            Menu {
+                scopeOption(L("Global"), id: nil)
+                ForEach(monitor.servers) { sample in
+                    scopeOption(sample.connection.name + " · " + sample.connection.team, id: sample.id)
+                }
+            } label: {
+                Text(monitor.servers.first { $0.id == monitor.selectedID }?.connection.name ?? L("Global"))
+                    .lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+            }.menuStyle(.borderlessButton).disabled(admin.busy)
+                .accessibilityIdentifier("server-selection")
             Button { adding = true } label: { Image(systemName: "plus") }
-                .help(L("Add a server")).accessibilityLabel(L("Add a server")).disabled(admin.busy)
-        }.font(.system(size: 11))
+                .buttonStyle(DeviceButton()).help(L("Add a server")).accessibilityLabel(L("Add a server")).disabled(admin.busy)
+        }.font(.system(size: 11, design: .monospaced)).padding(.horizontal, 8).padding(.vertical, 4).lcdPanel()
         .onChange(of: monitor.selectedID) { _ in configureAdministrator() }
         .sheet(isPresented: $adding) { ConnectionView { monitor.reloadConnections() } }
+    }
+
+    private func scopeOption(_ title: String, id: String?) -> some View {
+        Button { monitor.select(id) } label: {
+            if monitor.selectedID == id { Label(title, systemImage: "checkmark") } else { Text(title) }
+        }
     }
 
     private func configureAdministrator() {
@@ -29,7 +42,7 @@ struct FleetServerList: View {
     @ObservedObject var admin: Administration
 
     var body: some View {
-        Collapsible("Servers", key: "global.servers") {
+        Collapsible("Servers", key: "global.servers", glyph: .server) {
             VStack(alignment: .leading, spacing: 10) {
                 ForEach(monitor.servers) { sample in serverRow(sample) }
                 Text(L("Global adds connected servers. Each task runs on one server."))
@@ -42,7 +55,8 @@ struct FleetServerList: View {
         let counted = countedServers(monitor.servers).contains { $0.id == sample.id }
         return VStack(alignment: .leading, spacing: 5) {
             HStack {
-                Circle().fill(counted ? Paint.green : .orange).frame(width: 6, height: 6)
+                DeviceLamp(active: counted, status: counted ? "Connected" : "Offline")
+                DeviceIcon(glyph: .server)
                 Button(sample.connection.name) { monitor.select(sample.id) }.buttonStyle(.plain).fontWeight(.semibold)
                 Text(sample.connection.team).foregroundColor(Paint.muted).lineLimit(1)
                 Spacer(minLength: 2)
@@ -51,13 +65,18 @@ struct FleetServerList: View {
                         monitor.select(sample.id)
                         if admin.configure(monitor.administratorConnection) { admin.load() }
                         admin.showingManagement = true
-                    }.disabled(admin.busy || (!sample.connected && !admin.authorized))
+                    }.buttonStyle(DeviceButton()).disabled(admin.busy || (!sample.connected && !admin.authorized))
                 }
             }
             if counted, let document = sample.document, let pool = document.pool {
-                Text(LF("CPU %@ · RAM %@ %@ · %d agents", percent(sample.cpu.worker), gib(pool.ram_available), L("GiB"), document.connectedAgents.count))
-                    .monospacedDigit().foregroundColor(Paint.green)
-                Text(LF("%d / %d tasks · %@ %@ storage available", document.agents.count, pool.max_jobs, gib(document.diskReservable), L("GiB")))
+                HStack(alignment: .top, spacing: 8) {
+                    DeviceMeter(title: "CPU", value: percent(sample.cpu.worker), fraction: sample.cpu.worker, glyph: .cpu)
+                    DeviceMeter(title: L("Reservable RAM"), value: gib(pool.ram_available) + " " + L("GiB"), fraction: document.ramUsageFraction,
+                                detail: LF("Task use %@", percent(document.ramUsageFraction)), glyph: .ram)
+                    DeviceMeter(title: L("Disk free"), value: gib(document.diskReservable) + " " + L("GiB"), fraction: document.quotaFraction,
+                                detail: LF("Used %@", percent(document.quotaFraction)), glyph: .disk)
+                }
+                Text(LF("%d / %d tasks", document.agents.count, pool.max_jobs) + " · " + LF("%d agents", document.connectedAgents.count))
                     .monospacedDigit().foregroundColor(Paint.muted)
                 if let mac = document.mac {
                     Text(L(mac.available ? "Mac available" : "Mac busy"))
@@ -68,7 +87,7 @@ struct FleetServerList: View {
                 Text(L(!sample.connection.active ? "Disabled" : !sample.fresh ? "Offline" : sample.identity == nil ? "Update this server to include it in Global" : "Already counted in Global"))
                     .foregroundColor(Paint.muted)
             }
-        }.font(.system(size: 11))
+        }.font(.system(size: 11)).padding(6).lcdPanel()
     }
 }
 
@@ -115,9 +134,12 @@ struct ConnectionView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text(L("Add a server")).font(.headline).foregroundColor(Paint.ivory)
+            HStack {
+                DeviceIcon(glyph: .server, size: 21)
+                Text(L("Add a server")).font(.system(size: 15, weight: .bold, design: .monospaced))
+            }.foregroundColor(Paint.ivory)
             Text(L("Paste the private invitation provided by your administrator.")).font(.system(size: 12))
-            SecureField(L("Invitation link"), text: $link).accessibilityIdentifier("invitation-link")
+            SecureField(L("Invitation link"), text: $link).deviceInput().accessibilityIdentifier("invitation-link")
             Button(L("Paste invitation")) {
                 if let value = NSPasteboard.general.string(forType: .string), value.utf8.count <= 8192 { link = value }
             }
@@ -128,7 +150,8 @@ struct ConnectionView: View {
                     TextField(L("Team"), text: $team)
                     TextField(L("SSH alias"), text: $alias)
                     TextField(L("Administrator alias (optional)"), text: $administrator)
-                }.padding(.top, 8)
+                }.textFieldStyle(.plain).font(.system(size: 12, design: .monospaced))
+                    .padding(8).lcdPanel().padding(.top, 8)
             }
             if let error = editor.error { Text(error).font(.system(size: 11)).foregroundColor(.orange) }
             HStack {
@@ -139,7 +162,8 @@ struct ConnectionView: View {
                     .keyboardShortcut(.defaultAction)
             }
         }.padding(20).frame(minWidth: 320, idealWidth: 440, maxWidth: 540)
-            .background(Paint.panel).preferredColorScheme(.dark).interactiveDismissDisabled(editor.busy)
+            .foregroundStyle(Paint.ivory).deviceChassis(radius: 12).buttonStyle(DeviceButton())
+            .preferredColorScheme(.dark).interactiveDismissDisabled(editor.busy)
     }
 
     private var validAlias: Bool {
