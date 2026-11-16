@@ -56,11 +56,11 @@ struct FleetServerList: View {
             }
             if counted, let document = sample.document, let pool = document.pool {
                 HStack(alignment: .top, spacing: 8) {
-                    DeviceMeter(title: "CPU", value: percent(sample.cpu.worker), fraction: sample.cpu.worker)
+                    DeviceMeter(title: "CPU", value: percent(sample.cpu.worker), fraction: sample.cpu.worker, glyph: .cpu)
                     DeviceMeter(title: L("Reservable RAM"), value: gib(pool.ram_available) + " " + L("GiB"), fraction: document.ramUsageFraction,
-                                detail: LF("Task use %@", percent(document.ramUsageFraction)))
+                                detail: LF("Task use %@", percent(document.ramUsageFraction)), glyph: .ram)
                     DeviceMeter(title: L("Disk free"), value: gib(document.diskReservable) + " " + L("GiB"), fraction: document.quotaFraction,
-                                detail: LF("Used %@", percent(document.quotaFraction)))
+                                detail: LF("Used %@", percent(document.quotaFraction)), glyph: .disk)
                 }
                 Text(LF("%d / %d tasks", document.agents.count, pool.max_jobs) + " · " + LF("%d agents", document.connectedAgents.count))
                     .monospacedDigit().foregroundColor(Paint.muted)

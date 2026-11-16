@@ -385,19 +385,24 @@ struct DeviceMeter: View {
     let value: String
     let fraction: Double?
     var detail: String? = nil
+    var glyph: DeviceGlyph? = nil
+    var small = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title).font(.system(size: 9, weight: .medium)).foregroundStyle(Paint.muted)
-            Text(value).font(.system(size: 16, weight: .semibold, design: .monospaced))
+        VStack(alignment: .leading, spacing: small ? 1 : 2) {
+            HStack(spacing: 3) {
+                if let glyph { DeviceIcon(glyph: glyph, size: small ? 12 : 14) }
+                Text(title).font(.system(size: 9, weight: .medium)).foregroundStyle(Paint.muted)
+            }
+            Text(value).font(.system(size: small ? 15 : 16, weight: .semibold, design: .monospaced))
                 .foregroundStyle((fraction ?? 0) >= 0.85 ? Paint.orange : Paint.green)
             HStack(spacing: 2) {
                 ForEach(0..<10) { segment in
-                    Rectangle().fill(Double(segment) + 0.5 <= (fraction ?? 0) * 10
+                    RoundedRectangle(cornerRadius: 1).fill(Double(segment) + 0.5 <= (fraction ?? 0) * 10
                                      ? (segment > 7 ? Paint.orange : Paint.violet) : Paint.violet.opacity(0.16))
                 }
             }.frame(height: 4).accessibilityHidden(true)
-            if let detail { Text(detail).font(.system(size: 9)).foregroundStyle(Paint.ivory) }
+            if let detail { Text(detail).font(.system(size: small ? 8 : 9)).foregroundStyle(Paint.ivory) }
         }.lineLimit(1).minimumScaleFactor(0.70)
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityElement(children: .combine)
@@ -419,9 +424,11 @@ private extension MacPerformance {
 struct MiniMacPerformance: View {
     let visible: Bool
     let dense: Bool
+    let expandedReadout: Bool
     @State private var sample = MacPerformance()
     var body: some View {
-        MacReadings(sample: sample, dense: dense, cpuDetail: MacPerformanceView.cpuDetail(), thermal: L(sample.thermalLabel))
+        MacReadings(sample: sample, dense: dense, cpuDetail: MacPerformanceView.cpuDetail(),
+                    thermal: L(sample.thermalLabel), mini: !expandedReadout)
             .sampleMac(visible: visible, sample: $sample)
     }
 }
@@ -431,38 +438,52 @@ private struct MacReadings: View {
     let dense: Bool
     let cpuDetail: String
     let thermal: String
+    var mini = false
 
     var body: some View {
-        VStack(spacing: 4) {
-            HStack(alignment: .top, spacing: 6) {
-                DeviceMeter(title: "CPU", value: percent(sample.cpu), fraction: sample.cpu, detail: dense ? nil : cpuDetail)
+        VStack(spacing: mini ? 3 : 4) {
+            HStack(alignment: .top, spacing: mini ? 5 : 6) {
+                DeviceMeter(title: "CPU", value: percent(sample.cpu), fraction: sample.cpu,
+                            detail: dense ? nil : cpuDetail, glyph: .cpu, small: mini)
                 DeviceMeter(title: "RAM", value: percent(sample.memory?.usage.fraction), fraction: sample.memory?.usage.fraction,
-                            detail: dense ? nil : sample.memory?.usage.label)
-                DeviceMeter(title: "GPU Metal", value: percent(sample.gpus.first?.activity), fraction: sample.gpus.first?.activity,
-                            detail: dense ? nil : gpuDetail)
+                            detail: dense ? nil : ramDetail, glyph: .ram, small: mini)
+                DeviceMeter(title: mini ? "GPU" : "GPU Metal", value: percent(sample.gpus.first?.activity), fraction: sample.gpus.first?.activity,
+                            detail: dense ? nil : gpuDetail, glyph: .gpu, small: mini)
                 DeviceMeter(title: L("Disk"), value: percent(sample.disk?.fraction), fraction: sample.disk?.fraction,
-                            detail: dense ? nil : sample.disk.map { LF("Free: %@ %@", gib($0.available), L("GiB")) })
+                            detail: dense ? nil : diskDetail, glyph: .disk, small: mini)
             }
             if !dense {
-                ViewThatFits(in: .horizontal) {
-                    Text(systemStats + "   ·   " + traffic)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(systemStats)
-                        Text(traffic)
+                HStack(spacing: 4) {
+                    if sample.battery != nil { DeviceIcon(glyph: .battery, size: 12) }
+                    ViewThatFits(in: .horizontal) {
+                        if !mini { Text(systemStats + "   ·   " + traffic) }
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(systemStats)
+                            if !mini { Text(traffic) }
+                        }
                     }
-                }.font(.system(size: 9, design: .monospaced)).lineLimit(1)
+                }.font(.system(size: mini ? 8 : 9, design: .monospaced)).lineLimit(1).minimumScaleFactor(0.8)
                     .foregroundStyle(Paint.muted).frame(maxWidth: .infinity, alignment: .leading)
             }
         }
     }
 
+    private var ramDetail: String? {
+        sample.memory.map { mini ? size($0.usage.total) : $0.usage.label }
+    }
+    private var diskDetail: String? {
+        sample.disk.map { mini ? size($0.available) : LF("Free: %@ %@", gib($0.available), L("GiB")) }
+    }
     private var gpuDetail: String? {
         guard let gpu = sample.gpus.first else { return nil }
+        if mini { return gpu.cores.map { LF("%d cores", $0) } }
         return [gpu.cores.map { LF("%d cores", $0) }, gpu.memory.map { size($0) }].compactMap { $0 }.joined(separator: " · ")
     }
     private var systemStats: String {
-        var values = ["Swap " + size(sample.memory?.swap), L("Thermal state") + " " + thermal]
-        if let battery = sample.battery { values.append(L("Battery") + " " + percent(battery.charge)) }
+        var values: [String] = []
+        if let battery = sample.battery { values.append((mini ? "" : L("Battery") + " ") + percent(battery.charge)) }
+        values.append("Swap " + size(sample.memory?.swap))
+        values.append(mini ? thermal : L("Thermal state") + " " + thermal)
         return values.joined(separator: " · ")
     }
     private var traffic: String {

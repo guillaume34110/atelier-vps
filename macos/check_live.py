@@ -83,6 +83,7 @@ def main():
                 assert item['meter_face_pixels'] >= 1000
             if item['layout'] == 'mini-device':
                 assert item['device_accent_pixels'] >= 1000
+                assert (item['width'], item['height']) == (420, 128)
     if args.admin:
         assert result['administrator_roundtrip_verified'] is True
     print(json.dumps({'native_live_render': 'passed', 'samples': result['samples'],

@@ -20,7 +20,7 @@ disk I/O, network throughput, thermal state and battery where available. Metal
 reports each GPU and its recommended working set. GPU activity and memory usage
 depend on the driver. On Apple silicon, GPU memory is part of unified RAM.
 **Global** puts Mac readings and each connected server on the same panel. The
-compact display keeps local CPU, RAM, GPU and disk readings above the live VPS
+compact 420 × 128 pt display keeps local CPU, RAM, GPU and disk readings above the live VPS
 summary. Use the expand button to return to the full device.
 
 The original analog CPU dial shows authenticated worker use. The RAM dial shows

@@ -30,6 +30,8 @@ enum Paint {
     static let violet = Color(red: 0.74, green: 0.53, blue: 0.98)
     static let ectoplasma = Bundle.main.url(forResource: "ectoplasma", withExtension: "jpg")
         .flatMap { NSImage(contentsOf: $0) }
+    static let faceplate = Bundle.main.url(forResource: "ectoplasma-faceplate", withExtension: "jpg")
+        .flatMap { NSImage(contentsOf: $0) }
 }
 
 struct DeviceButton: ButtonStyle {
@@ -37,8 +39,32 @@ struct DeviceButton: ButtonStyle {
     func makeBody(configuration: ButtonStyleConfiguration) -> some View {
         configuration.label.padding(.horizontal, 8).padding(.vertical, 5)
             .foregroundStyle(selected ? Paint.green : Paint.ivory)
-            .background(RoundedRectangle(cornerRadius: 5).fill(configuration.isPressed || selected ? Paint.background : Paint.panel))
+            .background(RoundedRectangle(cornerRadius: 5).fill(
+                LinearGradient(colors: configuration.isPressed || selected ? [Paint.background, Paint.background] :
+                    [Paint.violet.opacity(0.28), Paint.panel, Paint.background], startPoint: .top, endPoint: .bottom)))
             .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(selected ? Paint.green.opacity(0.6) : Paint.violet.opacity(0.28)))
+    }
+}
+
+enum DeviceGlyph: String, CaseIterable {
+    case cpu, ram, gpu, disk, server, battery, expand, options
+
+    static let artwork: [Self: NSImage] = Dictionary(uniqueKeysWithValues: allCases.compactMap { glyph in
+        guard let url = Bundle.main.url(forResource: "ectoplasma-\(glyph.rawValue)", withExtension: "png"),
+              let image = NSImage(contentsOf: url) else { return nil }
+        return (glyph, image)
+    })
+}
+
+struct DeviceIcon: View {
+    let glyph: DeviceGlyph
+    var size: CGFloat = 13
+
+    var body: some View {
+        if let artwork = DeviceGlyph.artwork[glyph] {
+            Image(nsImage: artwork).resizable().interpolation(.high).scaledToFit()
+                .frame(width: size, height: size).accessibilityHidden(true)
+        }
     }
 }
 
@@ -570,31 +596,33 @@ private struct MiniWidget: View {
     let expand: () -> Void
     let menu: () -> Void
     @AppStorage("atelier-language") private var language = "system"
-    private var dense: Bool { size.height < 160 || size.width < 480 }
+    private var dense: Bool { size.height < 115 || size.width < 385 }
+    private var expandedReadout: Bool { size.height >= 160 && size.width >= 480 }
     private var snapshot: VPSSnapshot? { monitor.connected ? monitor.document : nil }
 
     var body: some View {
-        HStack(spacing: dense ? 5 : 9) {
-            if let artwork = Paint.ectoplasma {
+        HStack(spacing: 6) {
+            if let artwork = Paint.faceplate {
                 Image(nsImage: artwork).resizable().scaledToFill()
-                    .frame(width: dense ? 54 : 114, height: max(1, size.height - 14))
+                    .frame(width: dense ? 49 : 66, height: max(1, size.height - 14))
                     .clipped().clipShape(RoundedRectangle(cornerRadius: 7))
+                    .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Paint.violet.opacity(0.55)))
                     .accessibilityHidden(true)
             }
-            VStack(spacing: dense ? 4 : 6) {
-                HStack(spacing: 4) {
+            VStack(spacing: 4) {
+                HStack(spacing: 5) {
                     Text("Atelier VPS").font(.system(size: dense ? 10 : 12, weight: .bold, design: .monospaced))
                     Text("MAC").font(.system(size: 9, weight: .medium, design: .monospaced))
-                        .foregroundStyle(Paint.violet)
+                        .foregroundStyle(Paint.violet).padding(.horizontal, 4).padding(.vertical, 1).lcdPanel()
                     Spacer(minLength: 0)
-                    Button(action: expand) { Image(systemName: "arrow.up.left.and.arrow.down.right") }
+                    Button(action: expand) { DeviceIcon(glyph: .expand) }
                         .help(L("Expand widget")).accessibilityLabel(L("Expand widget"))
                         .accessibilityIdentifier("widget-expand")
-                    Button(action: menu) { Image(systemName: "ellipsis") }
+                    Button(action: menu) { DeviceIcon(glyph: .options) }
                         .help(L("Options")).accessibilityLabel(L("Options"))
                 }.buttonStyle(DeviceButton()).font(.system(size: 9, weight: .semibold)).lineLimit(1)
-                MiniMacPerformance(visible: monitor.visible, dense: dense)
-                    .padding(.horizontal, 5).padding(.vertical, dense ? 2 : 4).lcdPanel()
+                MiniMacPerformance(visible: monitor.visible, dense: dense, expandedReadout: expandedReadout)
+                    .padding(.horizontal, 5).padding(.vertical, 3).lcdPanel()
                 remoteDisplay
             }.frame(maxWidth: .infinity)
         }
@@ -607,18 +635,19 @@ private struct MiniWidget: View {
     private var remoteDisplay: some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
+                DeviceIcon(glyph: .server, size: 12)
                 Circle().fill(monitor.connected ? Paint.green : Paint.orange).frame(width: 5, height: 5)
                     .accessibilityLabel(L(monitor.connected ? "Connected" : "Offline"))
                 Text("VPS").foregroundStyle(Paint.violet).fontWeight(.bold)
                 Text(remoteSummary)
                 Spacer(minLength: 0)
             }
-            if let snapshot, !dense {
+            if let snapshot, expandedReadout {
                 Text(remoteDetail(snapshot)).foregroundStyle(snapshot.maintenance == true ? Paint.orange : Paint.muted)
             }
-        }.font(.system(size: dense ? 8 : 9, weight: .medium, design: .monospaced))
+        }.font(.system(size: expandedReadout ? 9 : 8, weight: .medium, design: .monospaced))
             .monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
-            .padding(.horizontal, 5).padding(.vertical, dense ? 3 : 5).lcdPanel()
+            .padding(.horizontal, 5).padding(.vertical, 3).lcdPanel()
     }
 
     private var remoteSummary: String {
@@ -627,7 +656,7 @@ private struct MiniWidget: View {
         let cpu = "CPU " + percent(monitor.cpu.worker)
         let ram = "RAM " + gib(snapshot.pool?.ram_available) + " " + unit
         let disk = L("Disk") + " " + gib(snapshot.diskReservable) + " " + unit
-        let fields = dense ? [cpu, ram, disk, LF("%d agents", snapshot.connectedAgents.count)] : [cpu, ram, disk]
+        let fields = expandedReadout ? [cpu, ram, disk] : [cpu, ram, disk, LF("%d agents", snapshot.connectedAgents.count)]
         return fields.joined(separator: "  ·  ")
     }
 
@@ -753,7 +782,7 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             fullFrame = panel.frame
             monitor.compact = true
             let screen = panel.screen?.visibleFrame
-            panel.setContentSize(NSSize(width: min(620, screen?.width ?? 620), height: 174))
+            panel.setContentSize(NSSize(width: min(420, screen?.width ?? 420), height: 128))
             if let screen {
                 let frame = panel.frame
                 panel.setFrameOrigin(NSPoint(x: min(max(frame.minX, screen.minX), screen.maxX - frame.width),
@@ -895,8 +924,8 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             pin(item); precondition(panel.level == before)
             let original = panel.frame
             setCompact(true)
-            guard monitor.compact && panel.frame.height == 174 else {
-                fputs("Mini resize failed: expected 174, actual \(panel.frame)\n", stderr); exit(1)
+            guard monitor.compact && panel.frame.height == 128 else {
+                fputs("Mini resize failed: expected 128, actual \(panel.frame)\n", stderr); exit(1)
             }
             setCompact(false)
             guard !monitor.compact && panel.frame == original else {
@@ -1018,7 +1047,7 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             ("narrow", 360, 600, false, false), ("standard", 480, 640, false, false),
             ("wide", 720, 800, false, false), ("short", 360, 300, false, false),
             ("mini-small", 340, 96, true, false), ("mini", 400, 96, true, false),
-            ("mini-wide", 600, 96, true, false), ("mini-device", 620, 174, true, false),
+            ("mini-wide", 600, 96, true, false), ("mini-device", 420, 128, true, false),
             ("compact-edge", 439, 760, false, false), ("standard-edge", 440, 760, false, false),
             ("column-before", 699, 800, false, false), ("column-after", 700, 800, false, false),
             ("auto-mini", 480, 219, true, false), ("auto-full", 480, 220, false, false)]
@@ -1098,6 +1127,7 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 struct WidgetMain {
     static func main() {
         if CommandLine.arguments.contains("--self-test") {
+            precondition(Paint.faceplate != nil && DeviceGlyph.artwork.count == DeviceGlyph.allCases.count)
             do { try runModelChecks(); try runFleetChecks(); try runAgentChecks(); try runAdminChecks(); try runFailureChecks(); runMacPerformanceChecks() } catch { fputs("Mac model checks failed: \(error)\n", stderr); exit(1) }
             return
         }
