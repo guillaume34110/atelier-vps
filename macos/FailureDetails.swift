@@ -186,7 +186,7 @@ struct FailureDetailView: View {
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }
         }.padding(18).frame(minWidth: 320, idealWidth: 480, maxWidth: 680, minHeight: 280, idealHeight: 520)
-            .foregroundColor(Paint.ivory).background(Paint.panel).preferredColorScheme(.dark)
+            .foregroundColor(Paint.ivory).deviceChassis(radius: 12).buttonStyle(DeviceButton()).preferredColorScheme(.dark)
             .onAppear { details.load(activity) }.onDisappear { details.cancel() }
     }
 }

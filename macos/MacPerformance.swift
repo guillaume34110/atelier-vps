@@ -290,17 +290,14 @@ struct MacPerformanceView: View {
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(), alignment: .topLeading), count: layout == .wide ? 2 : 1), spacing: 10) {
                     ForEach(sample.gpus) { gpu in gpuCard(gpu) }
                     Collapsible("CPU cores", key: "mac.cpu") {
-                        LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: layout == .standard ? 8 : 4), spacing: 8) {
+                        LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 4), spacing: 8) {
                             ForEach(sample.cores.indices, id: \.self) { index in
-                                VStack(spacing: 4) {
-                                    Text(LF("Core %d", index + 1)).foregroundColor(Paint.muted)
-                                    ProgressView(value: sample.cores[index] ?? 0).tint(Paint.green).accessibilityHidden(true)
-                                    Text(percent(sample.cores[index]))
-                                }.accessibilityElement(children: .combine)
+                                DeviceMeter(title: LF("Core %d", index + 1), value: percent(sample.cores[index]),
+                                            fraction: sample.cores[index], small: true)
                             }
                         }
                     }
-                    Collapsible("Local memory", key: "mac.memory") {
+                    Collapsible("Local memory", key: "mac.memory", glyph: .ram) {
                         if let memory = sample.memory {
                             row("Wired", size(memory.wired))
                             row("Compressed", size(memory.compressed))
@@ -308,12 +305,12 @@ struct MacPerformanceView: View {
                             row("Swap used", size(memory.swap))
                         } else { row("RAM", "—") }
                     }
-                    Collapsible("Local storage", key: "mac.storage") {
+                    Collapsible("Local storage", key: "mac.storage", glyph: .disk) {
                         row("Startup disk free", size(sample.disk?.available))
                         row("Disk read (all drives)", speed(sample.storageRate?.read))
                         row("Disk write (all drives)", speed(sample.storageRate?.write))
                     }
-                    Collapsible("Mac system", key: "mac.system") {
+                    Collapsible("Mac system", key: "mac.system", glyph: .battery) {
                         row("Thermal state", L(thermalLabel))
                         if let battery = sample.battery {
                             row(battery.plugged ? "Battery · AC power" : "Battery", percent(battery.charge))
@@ -336,14 +333,14 @@ struct MacPerformanceView: View {
     private var thermalLabel: String { sample.thermalLabel }
 
     private func gpuCard(_ gpu: MacGPU) -> some View {
-        Collapsible("Metal GPU", key: "mac.gpu.\(gpu.id)") {
+        Collapsible("Metal GPU", key: "mac.gpu.\(gpu.id)", glyph: .gpu) {
             HStack {
                 Text(gpu.name).fontWeight(.semibold).lineLimit(1)
                 Spacer()
                 if let cores = gpu.cores { Text(LF("%d cores", cores)) }
             }
-            row("GPU activity", gpu.activity.map { percent($0) } ?? L("Unavailable"))
-            if let activity = gpu.activity { ProgressView(value: activity).tint(Paint.green).accessibilityHidden(true) }
+            DeviceMeter(title: L("GPU activity"), value: gpu.activity.map { percent($0) } ?? L("Unavailable"),
+                        fraction: gpu.activity)
             if let renderer = gpu.renderer { row("Renderer", percent(renderer)) }
             if let tiler = gpu.tiler { row("Tiler", percent(tiler)) }
             if gpu.unified {

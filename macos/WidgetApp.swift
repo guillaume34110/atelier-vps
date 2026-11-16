@@ -36,13 +36,18 @@ enum Paint {
 
 struct DeviceButton: ButtonStyle {
     var selected = false
+    @Environment(\.isEnabled) private var enabled
     func makeBody(configuration: ButtonStyleConfiguration) -> some View {
-        configuration.label.padding(.horizontal, 8).padding(.vertical, 5)
+        configuration.label.padding(.horizontal, 9).padding(.vertical, 6)
+            .font(.system(size: 11, weight: .semibold, design: .monospaced))
             .foregroundStyle(selected ? Paint.green : Paint.ivory)
             .background(RoundedRectangle(cornerRadius: 5).fill(
                 LinearGradient(colors: configuration.isPressed || selected ? [Paint.background, Paint.background] :
-                    [Paint.violet.opacity(0.28), Paint.panel, Paint.background], startPoint: .top, endPoint: .bottom)))
-            .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(selected ? Paint.green.opacity(0.6) : Paint.violet.opacity(0.28)))
+                    [Paint.violet.opacity(0.38), Paint.panel, Paint.background], startPoint: .top, endPoint: .bottom)))
+            .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(selected ? Paint.violet : Paint.violet.opacity(0.38)))
+            .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 6))
+            .shadow(color: .black.opacity(0.75), radius: 1, y: configuration.isPressed ? 0 : 2)
+            .opacity(enabled ? 1 : 0.48)
     }
 }
 
@@ -70,19 +75,68 @@ struct DeviceIcon: View {
 
 extension View {
     func lcdPanel() -> some View {
-        background(RoundedRectangle(cornerRadius: 8).fill(Paint.background))
-            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Paint.violet.opacity(0.28)).allowsHitTesting(false))
+        background {
+            RoundedRectangle(cornerRadius: 8).fill(
+                LinearGradient(colors: [.black.opacity(0.76), Paint.background, Paint.background],
+                               startPoint: .top, endPoint: .bottom))
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 8).strokeBorder(
+                LinearGradient(colors: [Paint.violet.opacity(0.44), Paint.panel, Paint.violet.opacity(0.20)],
+                               startPoint: .topLeading, endPoint: .bottomTrailing)).allowsHitTesting(false)
+        }
+    }
+
+    func deviceInput() -> some View {
+        textFieldStyle(.plain).font(.system(size: 12, weight: .medium, design: .monospaced))
+            .foregroundStyle(Paint.green).padding(7).lcdPanel()
     }
 
     func deviceChassis(radius: CGFloat) -> some View {
-        background(LinearGradient(colors: [Paint.panel, Paint.background, Paint.panel],
+        background(LinearGradient(colors: [Paint.panel, Paint.background, Paint.panel, Paint.background],
                                   startPoint: .topLeading, endPoint: .bottomTrailing))
             .clipShape(RoundedRectangle(cornerRadius: radius))
             .overlay {
-                RoundedRectangle(cornerRadius: radius).strokeBorder(Paint.violet.opacity(0.55))
-                    .overlay(RoundedRectangle(cornerRadius: radius - 3).strokeBorder(.black.opacity(0.7)).padding(3))
-                    .allowsHitTesting(false)
+                ZStack {
+                    RoundedRectangle(cornerRadius: radius).strokeBorder(
+                        LinearGradient(colors: [Paint.violet.opacity(0.8), Paint.panel, Paint.violet.opacity(0.5)],
+                                       startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 2)
+                    RoundedRectangle(cornerRadius: radius - 4).strokeBorder(.black.opacity(0.85), lineWidth: 2).padding(4)
+                    VStack {
+                        hardwareRail
+                        Spacer(minLength: 0)
+                        hardwareRail
+                    }.padding(5)
+                }.allowsHitTesting(false).accessibilityHidden(true)
             }
+    }
+
+    private var hardwareRail: some View {
+        HStack {
+            CaseFastener()
+            Spacer(minLength: 0)
+            CaseFastener()
+        }
+    }
+}
+
+private struct CaseFastener: View {
+    var body: some View {
+        Circle().fill(Paint.panel).overlay(Circle().strokeBorder(Paint.violet.opacity(0.55)))
+            .frame(width: 6, height: 6)
+            .overlay(Rectangle().fill(.black.opacity(0.9)).frame(width: 3.5, height: 1).rotationEffect(.degrees(35)))
+    }
+}
+
+struct DeviceLamp: View {
+    let active: Bool
+    let status: String
+    var size: CGFloat = 6
+
+    var body: some View {
+        Circle().fill(active ? Paint.green : Paint.orange)
+            .shadow(color: (active ? Paint.green : Paint.orange).opacity(0.55), radius: 3)
+            .frame(width: size, height: size).accessibilityLabel(L(status))
     }
 }
 
@@ -353,17 +407,21 @@ struct Dial: View {
 struct Collapsible<Content: View>: View {
     let title: String
     let key: String
+    let glyph: DeviceGlyph?
     let content: Content
     @State private var expanded: Bool
 
-    init(_ title: String, key: String, initiallyExpanded: Bool = true, @ViewBuilder content: () -> Content) {
-        self.title = title; self.key = key; self.content = content()
+    init(_ title: String, key: String, initiallyExpanded: Bool = true, glyph: DeviceGlyph? = nil, @ViewBuilder content: () -> Content) {
+        self.title = title; self.key = key; self.glyph = glyph; self.content = content()
         _expanded = State(initialValue: CommandLine.arguments.contains("--capture") ? initiallyExpanded :
             UserDefaults.standard.object(forKey: key) as? Bool ?? initiallyExpanded)
     }
     var body: some View {
         DisclosureGroup(isExpanded: $expanded) { content.padding(.top, 8) } label: {
-            Text(L(title)).font(.system(size: 11, weight: .semibold)).foregroundColor(Paint.ivory)
+            HStack(spacing: 5) {
+                if let glyph { DeviceIcon(glyph: glyph) }
+                Text(L(title)).font(.system(size: 11, weight: .semibold, design: .monospaced)).foregroundColor(Paint.ivory)
+            }
         }
         .onChange(of: expanded) { UserDefaults.standard.set(expanded, forKey: key) }
         .padding(12).lcdPanel()
@@ -406,7 +464,7 @@ private struct WidgetView: View {
                 }
                 Button(action: menu) { Image(systemName: "ellipsis") }.help(L("Options")).accessibilityLabel(L("Options"))
                 Button(action: hide) { Image(systemName: "chevron.down") }.help(L("Hide widget")).accessibilityLabel(L("Hide widget"))
-            }.buttonStyle(DeviceButton())
+            }.padding(.horizontal, 8).padding(.vertical, 5).lcdPanel().buttonStyle(DeviceButton())
             Rectangle().fill(Paint.violet.opacity(0.5)).frame(height: 1)
             if !monitor.showingMac { FleetPicker(monitor: monitor, admin: admin) }
             HStack(spacing: 5) {
@@ -418,7 +476,7 @@ private struct WidgetView: View {
             if monitor.showingMac {
                 MacPerformanceView(layout: layout, visible: monitor.visible)
             } else if monitor.showingAgents {
-                AgentsView(monitor: monitor, control: monitor.agents)
+                AgentsView(layout: layout, monitor: monitor, control: monitor.agents)
             } else if admin.authorized && admin.showingManagement {
                 if monitor.selectedID == nil && monitor.servers.count > 1 {
                     VStack(alignment: .leading, spacing: 12) {
@@ -441,7 +499,7 @@ private struct WidgetView: View {
                         MacPerformanceView(layout: layout, visible: monitor.visible, embedded: true)
                         FleetServerList(monitor: monitor, admin: admin)
                     }
-                    Collapsible("Resources", key: profile + ".resources") {
+                    Collapsible("Resources", key: profile + ".resources", glyph: .server) {
                         HStack(spacing: 8) {
                             Dial(title: L("YOUR CPU"), value: percent(monitor.cpu.worker), fraction: monitor.cpu.worker,
                                  detail: LF("Limit %.2f vCPU", snapshot?.telemetry?.worker_cpu_limit ?? Double(snapshot?.pool?.cpu_total ?? 0)), compact: layout == .compact)
@@ -481,7 +539,8 @@ private struct WidgetView: View {
                     Button(action: { NSWorkspace.shared.open(Configuration.dashboard) }) {
                         Image(systemName: "arrow.up.right.square")
                     }.buttonStyle(.plain).help(L("Dashboard")).accessibilityLabel(L("Dashboard"))
-                }.font(.system(size: 10)).foregroundColor(monitor.connected ? Paint.muted : .orange)
+                }.font(.system(size: 10, design: .monospaced)).foregroundColor(monitor.connected ? Paint.muted : .orange)
+                    .padding(.horizontal, 8).padding(.vertical, 4).lcdPanel()
             }
         }
         .padding(14).frame(minWidth: 340, idealWidth: 480, maxWidth: .infinity, minHeight: 220, idealHeight: 640, maxHeight: .infinity)
@@ -727,6 +786,7 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         panel.hasShadow = true
         panel.hidesOnDeactivate = false
         panel.isMovableByWindowBackground = true
+        panel.ignoresMouseEvents = CommandLine.arguments.contains("--capture")
         panel.level = .floating
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         if !panel.setFrameUsingName("usevps-widget") {
@@ -1075,7 +1135,13 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 return
             }
             let (name, width, height, mini, admin) = layouts[index]
-            if name == "server" { monitor.select(countedServers(monitor.servers).first?.id) }
+            if admin {
+                monitor.select(administration.connectionID)
+            } else if name == "server" {
+                monitor.select(countedServers(monitor.servers).first?.id)
+            } else if monitor.selectedID != nil {
+                monitor.select(nil)
+            }
             let agents = name.hasPrefix("agents-")
             monitor.showingMac = name.hasPrefix("mac-")
             monitor.showingAgents = agents
