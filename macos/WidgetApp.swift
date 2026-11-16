@@ -41,13 +41,14 @@ final class Monitor: ObservableObject {
     @Published var servers: [ServerSample] = []
     @Published var selectedID: String?
     @Published var showingAgents = false
+    @Published var showingMac = CommandLine.arguments.contains("--mac-performance")
+    @Published private(set) var visible = true
     let agents = RemoteAgentsControl()
     var onUpdate: (() -> Void)?
     var successfulSamples = 0
     var raw = Data()
     private var process: Process?
     private var timer: Timer?
-    private var visible = true
     private var queue: [String] = []
     private var retryCount: [String: Int] = [:]
     private var nextSample: [String: Date] = [:]
@@ -269,7 +270,7 @@ private struct GaugeFace: View, Animatable {
     }
 }
 
-private struct Dial: View {
+struct Dial: View {
     let title: String
     let value: String
     let fraction: Double?
@@ -283,7 +284,7 @@ private struct Dial: View {
                 .animation(.easeInOut(duration: 0.8), value: fraction)
             Text(title).font(.system(size: 11, weight: .bold)).tracking(1.2)
             Text(value).font(.system(size: compact ? 18 : 20, weight: .semibold, design: .rounded)).monospacedDigit()
-            Text(detail).font(.system(size: 9, design: .monospaced)).foregroundColor(Paint.muted).lineLimit(1)
+            Text(detail).font(.system(size: 9, design: .monospaced)).foregroundColor(Paint.muted).lineLimit(1).minimumScaleFactor(0.8)
         }
         .padding(.horizontal, 8).padding(.bottom, 8)
         .frame(maxWidth: .infinity)
@@ -332,26 +333,37 @@ private struct WidgetView: View {
                 Image(systemName: "gauge.with.dots.needle.67percent").foregroundColor(Paint.ivory)
                 Text("Atelier VPS").font(.system(size: 20, weight: .bold, design: .rounded)).lineLimit(1).minimumScaleFactor(0.9)
                 Spacer(minLength: 4)
-                Circle().fill(tint).frame(width: 7, height: 7).help(L(monitor.connected ? "Connected" : "Offline"))
-                    .accessibilityLabel(L(monitor.connected ? "Connected" : "Offline"))
+                if !monitor.showingMac {
+                    Circle().fill(tint).frame(width: 7, height: 7).help(L(monitor.connected ? "Connected" : "Offline"))
+                        .accessibilityLabel(L(monitor.connected ? "Connected" : "Offline"))
+                }
                 Button(action: compact) { Image(systemName: "rectangle.compress.vertical") }
                     .help(L("Mini bar")).accessibilityLabel(L("Mini bar")).accessibilityIdentifier("widget-mini")
-                Button(action: { monitor.refresh() }) { Image(systemName: "arrow.clockwise") }
-                    .help(L("Refresh")).accessibilityLabel(L("Refresh"))
+                if !monitor.showingMac {
+                    Button(action: { monitor.refresh() }) { Image(systemName: "arrow.clockwise") }
+                        .help(L("Refresh")).accessibilityLabel(L("Refresh"))
+                }
                 Button(action: menu) { Image(systemName: "ellipsis") }.help(L("Options")).accessibilityLabel(L("Options"))
                 Button(action: hide) { Image(systemName: "chevron.down") }.help(L("Hide widget")).accessibilityLabel(L("Hide widget"))
             }.buttonStyle(.plain)
             HStack(spacing: 0) { Color(red: 0.20, green: 0.36, blue: 0.72); Paint.ivory; Paint.orange }
                 .frame(height: 2).clipShape(Capsule())
-            FleetPicker(monitor: monitor, admin: admin)
+            if !monitor.showingMac { FleetPicker(monitor: monitor, admin: admin) }
             Picker(L("Widget section"), selection: Binding(get: {
-                monitor.showingAgents ? 1 : admin.authorized && admin.showingManagement ? 2 : 0
-            }, set: { value in monitor.showingAgents = value == 1; admin.showingManagement = value == 2 })) {
+                monitor.showingMac ? 3 : monitor.showingAgents ? 1 : admin.authorized && admin.showingManagement ? 2 : 0
+            }, set: { value in
+                monitor.showingMac = value == 3
+                monitor.showingAgents = value == 1
+                admin.showingManagement = value == 2
+            })) {
                 Text(L("Monitoring")).tag(0)
+                Text("Mac").tag(3)
                 Text(L("Agents")).tag(1)
                 if admin.authorized { Text(L("Management")).tag(2) }
             }.pickerStyle(.segmented).labelsHidden().accessibilityIdentifier("widget-section")
-            if monitor.showingAgents {
+            if monitor.showingMac {
+                MacPerformanceView(layout: layout, visible: monitor.visible)
+            } else if monitor.showingAgents {
                 AgentsView(monitor: monitor, control: monitor.agents)
             } else if admin.authorized && admin.showingManagement {
                 if monitor.selectedID == nil && monitor.servers.count > 1 {
@@ -405,13 +417,15 @@ private struct WidgetView: View {
                 }.id(profile)
             }
             }
-            HStack {
-                Text(freshness).lineLimit(1)
-                Spacer(minLength: 4)
-                Button(action: { NSWorkspace.shared.open(Configuration.dashboard) }) {
-                    Image(systemName: "arrow.up.right.square")
-                }.buttonStyle(.plain).help(L("Dashboard")).accessibilityLabel(L("Dashboard"))
-            }.font(.system(size: 10)).foregroundColor(monitor.connected ? Paint.muted : .orange)
+            if !monitor.showingMac {
+                HStack {
+                    Text(freshness).lineLimit(1)
+                    Spacer(minLength: 4)
+                    Button(action: { NSWorkspace.shared.open(Configuration.dashboard) }) {
+                        Image(systemName: "arrow.up.right.square")
+                    }.buttonStyle(.plain).help(L("Dashboard")).accessibilityLabel(L("Dashboard"))
+                }.font(.system(size: 10)).foregroundColor(monitor.connected ? Paint.muted : .orange)
+            }
         }
         .padding(14).frame(minWidth: 340, idealWidth: 480, maxWidth: .infinity, minHeight: 220, idealHeight: 640, maxHeight: .infinity)
         .foregroundColor(.white.opacity(0.92))
@@ -939,7 +953,8 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             layouts += [("admin-narrow", 360, 620, false, true), ("admin", 480, 740, false, true),
                         ("admin-wide", 720, 800, false, true)]
         }
-        layouts += [("agents-narrow", 360, 640, false, false), ("agents-wide", 720, 720, false, false)]
+        layouts += [("agents-narrow", 360, 640, false, false), ("agents-wide", 720, 720, false, false),
+                    ("mac-narrow", 360, 640, false, false), ("mac-wide", 720, 720, false, false)]
         let originalFrame = panel.frame, originalPolicy = administration.draft
         var evidence: [[String: Any]] = []
         func next(_ index: Int) {
@@ -949,6 +964,7 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                         .write(to: path.deletingLastPathComponent().appendingPathComponent("widget-layouts.json"), options: .withoutOverwriting)
                     setCompact(false); panel.setFrame(originalFrame, display: true)
                     monitor.showingAgents = false
+                    monitor.showingMac = false
                     administration.showingManagement = false; administration.draft = originalPolicy
                     if CommandLine.arguments.contains("--exit-after-capture") { quit() }
                 } catch { fputs("Layout receipt failed: \(error)\n", stderr); exit(1) }
@@ -956,6 +972,7 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             }
             let (name, width, height, mini, admin) = layouts[index]
             let agents = name.hasPrefix("agents-")
+            monitor.showingMac = name.hasPrefix("mac-")
             monitor.showingAgents = agents
             administration.showingManagement = admin
             if CommandLine.arguments.contains("--capture-mac-worker"),
@@ -966,7 +983,7 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             }
             if admin { administration.selectMode("allocated") }
             panel.setContentSize(NSSize(width: width, height: height))
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [self] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + (name == "mac-narrow" ? 2.5 : 0.3)) { [self] in
                 do {
                     guard let view = panel.contentView else { throw MonitorError.invalidData }
                     let macFixture = CommandLine.arguments.contains("--capture-mac-worker") &&
@@ -1002,7 +1019,7 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 struct WidgetMain {
     static func main() {
         if CommandLine.arguments.contains("--self-test") {
-            do { try runModelChecks(); try runFleetChecks(); try runAgentChecks(); try runAdminChecks(); try runFailureChecks() } catch { fputs("Mac model checks failed: \(error)\n", stderr); exit(1) }
+            do { try runModelChecks(); try runFleetChecks(); try runAgentChecks(); try runAdminChecks(); try runFailureChecks(); runMacPerformanceChecks() } catch { fputs("Mac model checks failed: \(error)\n", stderr); exit(1) }
             return
         }
         let application = NSApplication.shared

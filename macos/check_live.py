@@ -67,6 +67,7 @@ def main():
         layouts = json.loads((root / 'widget-layouts.json').read_text())
         names = {item['layout'] for item in layouts}
         assert {'agents-narrow', 'agents-wide'} <= names
+        assert {'mac-narrow', 'mac-wide'} <= names
         assert {'narrow', 'standard', 'wide', 'short', 'mini-small', 'mini', 'mini-wide'} <= names
         assert {'compact-edge', 'standard-edge', 'column-before', 'column-after', 'auto-mini', 'auto-full'} <= names
         if result['administrator_authenticated']:

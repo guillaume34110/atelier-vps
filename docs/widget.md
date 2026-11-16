@@ -14,6 +14,12 @@ writes a receipt and verifies an ad-hoc signature. Copy `usevps.app` to
 `~/Applications/Atelier VPS.app` and open it. No Apple credential or persistent
 local server is installed.
 
+The **Mac** tab samples the computer running the widget every two seconds while
+the tab is visible. It shows per-core CPU load, RAM and swap, startup disk usage,
+disk I/O, network throughput, thermal state and battery where available. Metal
+reports each GPU and its recommended working set. GPU activity and memory usage
+depend on the driver. On Apple silicon, GPU memory is part of unified RAM.
+
 The original analog CPU dial shows authenticated worker use. The RAM dial shows
 RAM **reservable now** in large text. Its needle shows actual task RAM use divided
 by the current task envelope (reserved plus still reservable), with a percentage
