@@ -113,8 +113,8 @@ struct AdminView: View {
     }
 
     private var card: some View {
-        RoundedRectangle(cornerRadius: 12).fill(.black.opacity(0.15))
-            .overlay(RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.10), lineWidth: 1))
+        RoundedRectangle(cornerRadius: 8).fill(Paint.background)
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Paint.violet.opacity(0.28)))
     }
 
     private var maxPoolSlots: Int {

@@ -204,7 +204,7 @@ struct AgentsView: View {
                     .font(.system(size: 10)).foregroundColor(Paint.muted).fixedSize(horizontal: false, vertical: true)
             }
         }.padding(12).frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 13).fill(.black.opacity(0.12)))
+            .lcdPanel()
     }
 }
 

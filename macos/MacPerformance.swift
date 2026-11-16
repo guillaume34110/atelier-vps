@@ -254,13 +254,31 @@ private func rate<Key>(_ current: [Key: IOCounters], since previous: [Key: IOCou
 struct MacPerformanceView: View {
     let layout: WidgetLayout
     let visible: Bool
+    var embedded = false
     @State private var sample = MacPerformance()
     private static let performanceCores = MacPerformanceSampler.sysctl("hw.perflevel0.physicalcpu", initial: Int32(0))
     private static let efficiencyCores = MacPerformanceSampler.sysctl("hw.perflevel1.physicalcpu", initial: Int32(0))
     private var compact: Bool { layout == .compact }
 
     var body: some View {
-        ScrollView {
+        Group {
+            if embedded {
+                VStack(spacing: 6) {
+                    HStack {
+                        Label("Mac", systemImage: "laptopcomputer").foregroundStyle(Paint.ivory)
+                        Spacer()
+                        if let gpu = sample.gpus.first { Text(gpu.name).foregroundStyle(Paint.muted) }
+                    }.font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    MacReadings(sample: sample, dense: layout == .compact, cpuDetail: coreSummary, thermal: L(thermalLabel))
+                    Collapsible("Mac details", key: "global.mac.details", initiallyExpanded: false) { details }
+                }.padding(10).lcdPanel()
+            } else {
+                ScrollView { details }
+            }
+        }.sampleMac(visible: visible, sample: $sample)
+    }
+
+    private var details: some View {
             VStack(spacing: 10) {
                 HStack(spacing: 8) {
                     Dial(title: L("CPU"), value: percent(sample.cpu), fraction: sample.cpu, detail: coreSummary, compact: compact)
@@ -305,33 +323,17 @@ struct MacPerformanceView: View {
                     }
                 }.font(.system(size: 11, design: .monospaced)).monospacedDigit()
             }
-        }
-        .task(id: visible) { @MainActor in
-            guard visible else { return }
-            let sampler = MacPerformanceSampler()
-            while !Task.isCancelled {
-                sample = sampler.sample()
-                try? await Task.sleep(for: .seconds(2))
-            }
-        }
     }
 
-    private var coreSummary: String {
+    fileprivate static func cpuDetail() -> String {
         if let p = Self.performanceCores, let e = Self.efficiencyCores, p > 0, e > 0 {
             return LF("%d P · %d E", p, e)
         }
         return LF("%d cores", ProcessInfo.processInfo.processorCount)
     }
 
-    private var thermalLabel: String {
-        switch sample.thermal {
-        case .nominal: return "Nominal"
-        case .fair: return "Fair"
-        case .serious: return "Serious"
-        case .critical: return "Critical"
-        @unknown default: return "Unavailable"
-        }
-    }
+    private var coreSummary: String { Self.cpuDetail() }
+    private var thermalLabel: String { sample.thermalLabel }
 
     private func gpuCard(_ gpu: MacGPU) -> some View {
         Collapsible("Metal GPU", key: "mac.gpu.\(gpu.id)") {
@@ -361,6 +363,112 @@ struct MacPerformanceView: View {
         }.accessibilityElement(children: .combine)
     }
 
+    private func size(_ bytes: Double?) -> String { bytes.map { gib($0) + " " + L("GiB") } ?? "—" }
+    private func speed(_ bytes: Double?) -> String { bytes.map { LF("%@/s", transferBytes($0)) } ?? "—" }
+}
+
+private extension View {
+    func sampleMac(visible: Bool, sample: Binding<MacPerformance>) -> some View {
+        task(id: visible) { @MainActor in
+            guard visible else { return }
+            let sampler = MacPerformanceSampler()
+            while !Task.isCancelled {
+                sample.wrappedValue = sampler.sample()
+                try? await Task.sleep(for: .seconds(2))
+            }
+        }
+    }
+}
+
+struct DeviceMeter: View {
+    let title: String
+    let value: String
+    let fraction: Double?
+    var detail: String? = nil
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title).font(.system(size: 9, weight: .medium)).foregroundStyle(Paint.muted)
+            Text(value).font(.system(size: 16, weight: .semibold, design: .monospaced))
+                .foregroundStyle((fraction ?? 0) >= 0.85 ? Paint.orange : Paint.green)
+            HStack(spacing: 2) {
+                ForEach(0..<10) { segment in
+                    Rectangle().fill(Double(segment) + 0.5 <= (fraction ?? 0) * 10
+                                     ? (segment > 7 ? Paint.orange : Paint.violet) : Paint.violet.opacity(0.16))
+                }
+            }.frame(height: 4).accessibilityHidden(true)
+            if let detail { Text(detail).font(.system(size: 9)).foregroundStyle(Paint.ivory) }
+        }.lineLimit(1).minimumScaleFactor(0.70)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .combine)
+    }
+}
+
+private extension MacPerformance {
+    var thermalLabel: String {
+        switch thermal {
+        case .nominal: return "Nominal"
+        case .fair: return "Fair"
+        case .serious: return "Serious"
+        case .critical: return "Critical"
+        @unknown default: return "Unavailable"
+        }
+    }
+}
+
+struct MiniMacPerformance: View {
+    let visible: Bool
+    let dense: Bool
+    @State private var sample = MacPerformance()
+    var body: some View {
+        MacReadings(sample: sample, dense: dense, cpuDetail: MacPerformanceView.cpuDetail(), thermal: L(sample.thermalLabel))
+            .sampleMac(visible: visible, sample: $sample)
+    }
+}
+
+private struct MacReadings: View {
+    let sample: MacPerformance
+    let dense: Bool
+    let cpuDetail: String
+    let thermal: String
+
+    var body: some View {
+        VStack(spacing: 4) {
+            HStack(alignment: .top, spacing: 6) {
+                DeviceMeter(title: "CPU", value: percent(sample.cpu), fraction: sample.cpu, detail: dense ? nil : cpuDetail)
+                DeviceMeter(title: "RAM", value: percent(sample.memory?.usage.fraction), fraction: sample.memory?.usage.fraction,
+                            detail: dense ? nil : sample.memory?.usage.label)
+                DeviceMeter(title: "GPU Metal", value: percent(sample.gpus.first?.activity), fraction: sample.gpus.first?.activity,
+                            detail: dense ? nil : gpuDetail)
+                DeviceMeter(title: L("Disk"), value: percent(sample.disk?.fraction), fraction: sample.disk?.fraction,
+                            detail: dense ? nil : sample.disk.map { LF("Free: %@ %@", gib($0.available), L("GiB")) })
+            }
+            if !dense {
+                ViewThatFits(in: .horizontal) {
+                    Text(systemStats + "   ·   " + traffic)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(systemStats)
+                        Text(traffic)
+                    }
+                }.font(.system(size: 9, design: .monospaced)).lineLimit(1)
+                    .foregroundStyle(Paint.muted).frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    private var gpuDetail: String? {
+        guard let gpu = sample.gpus.first else { return nil }
+        return [gpu.cores.map { LF("%d cores", $0) }, gpu.memory.map { size($0) }].compactMap { $0 }.joined(separator: " · ")
+    }
+    private var systemStats: String {
+        var values = ["Swap " + size(sample.memory?.swap), L("Thermal state") + " " + thermal]
+        if let battery = sample.battery { values.append(L("Battery") + " " + percent(battery.charge)) }
+        return values.joined(separator: " · ")
+    }
+    private var traffic: String {
+        L("Disk") + " ↓" + speed(sample.storageRate?.read) + " ↑" + speed(sample.storageRate?.write)
+            + "   NET ↓" + speed(sample.networkRate?.received) + " ↑" + speed(sample.networkRate?.sent)
+    }
     private func size(_ bytes: Double?) -> String { bytes.map { gib($0) + " " + L("GiB") } ?? "—" }
     private func speed(_ bytes: Double?) -> String { bytes.map { LF("%@/s", transferBytes($0)) } ?? "—" }
 }

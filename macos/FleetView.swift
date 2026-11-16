@@ -13,8 +13,8 @@ struct FleetPicker: View {
                 ForEach(monitor.servers) { sample in Text(sample.connection.name + " · " + sample.connection.team).tag(sample.id) }
             }.labelsHidden().disabled(admin.busy).accessibilityIdentifier("server-selection")
             Button { adding = true } label: { Image(systemName: "plus") }
-                .help(L("Add a server")).accessibilityLabel(L("Add a server")).disabled(admin.busy)
-        }.font(.system(size: 11))
+                .buttonStyle(DeviceButton()).help(L("Add a server")).accessibilityLabel(L("Add a server")).disabled(admin.busy)
+        }.font(.system(size: 11, design: .monospaced)).padding(7).lcdPanel()
         .onChange(of: monitor.selectedID) { _ in configureAdministrator() }
         .sheet(isPresented: $adding) { ConnectionView { monitor.reloadConnections() } }
     }
@@ -51,13 +51,18 @@ struct FleetServerList: View {
                         monitor.select(sample.id)
                         if admin.configure(monitor.administratorConnection) { admin.load() }
                         admin.showingManagement = true
-                    }.disabled(admin.busy || (!sample.connected && !admin.authorized))
+                    }.buttonStyle(DeviceButton()).disabled(admin.busy || (!sample.connected && !admin.authorized))
                 }
             }
             if counted, let document = sample.document, let pool = document.pool {
-                Text(LF("CPU %@ · RAM %@ %@ · %d agents", percent(sample.cpu.worker), gib(pool.ram_available), L("GiB"), document.connectedAgents.count))
-                    .monospacedDigit().foregroundColor(Paint.green)
-                Text(LF("%d / %d tasks · %@ %@ storage available", document.agents.count, pool.max_jobs, gib(document.diskReservable), L("GiB")))
+                HStack(alignment: .top, spacing: 8) {
+                    DeviceMeter(title: "CPU", value: percent(sample.cpu.worker), fraction: sample.cpu.worker)
+                    DeviceMeter(title: L("Reservable RAM"), value: gib(pool.ram_available) + " " + L("GiB"), fraction: document.ramUsageFraction,
+                                detail: LF("Task use %@", percent(document.ramUsageFraction)))
+                    DeviceMeter(title: L("Disk free"), value: gib(document.diskReservable) + " " + L("GiB"), fraction: document.quotaFraction,
+                                detail: LF("Used %@", percent(document.quotaFraction)))
+                }
+                Text(LF("%d / %d tasks", document.agents.count, pool.max_jobs) + " · " + LF("%d agents", document.connectedAgents.count))
                     .monospacedDigit().foregroundColor(Paint.muted)
                 if let mac = document.mac {
                     Text(L(mac.available ? "Mac available" : "Mac busy"))

@@ -233,3 +233,7 @@
 "Dedicated VRAM" = "VRAM dédiée";
 "Metal recommended working set" = "Budget mémoire Metal conseillé";
 "%@/s" = "%@/s";
+"Mac details" = "Détails du Mac";
+"Disk free" = "Disque libre";
+"Reservable RAM" = "RAM réservable";
+"Used %@" = "Occupé %@";

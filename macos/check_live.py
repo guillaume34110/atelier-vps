@@ -50,7 +50,7 @@ def main():
         return
     assert result['source'] == 'real restricted SSH' and result['connected'] and result['samples'] >= 2
     assert result['controls_exercised'] is True
-    assert result['meter_face_pixels'] >= 1000
+    assert result['device_accent_pixels'] >= 200
     assert result['automatic_breakpoints_exercised'] is True
     assert result['connected_agents'] >= len(result['status']['pool']['active'])
     assert all(':' in clock for clock in result['history_times'])
@@ -67,8 +67,8 @@ def main():
         layouts = json.loads((root / 'widget-layouts.json').read_text())
         names = {item['layout'] for item in layouts}
         assert {'agents-narrow', 'agents-wide'} <= names
-        assert {'mac-narrow', 'mac-wide'} <= names
-        assert {'narrow', 'standard', 'wide', 'short', 'mini-small', 'mini', 'mini-wide'} <= names
+        assert {'mac-narrow', 'mac-wide', 'server'} <= names
+        assert {'narrow', 'standard', 'wide', 'short', 'mini-small', 'mini', 'mini-wide', 'mini-device'} <= names
         assert {'compact-edge', 'standard-edge', 'column-before', 'column-after', 'auto-mini', 'auto-full'} <= names
         if result['administrator_authenticated']:
             assert {'admin-narrow', 'admin', 'admin-wide'} <= names
@@ -79,8 +79,10 @@ def main():
             assert item['mini'] == (item['height'] < 220)
             expected = 'mini' if item['height'] < 220 else 'compact' if item['width'] < 440 else 'standard' if item['width'] < 700 else 'wide'
             assert item['resolved_layout'] == expected
-            if not item['mini'] and not item['management'] and not item.get('agents') and item['height'] >= 500:
+            if item['layout'] in {'mac-narrow', 'mac-wide', 'server'}:
                 assert item['meter_face_pixels'] >= 1000
+            if item['layout'] == 'mini-device':
+                assert item['device_accent_pixels'] >= 1000
     if args.admin:
         assert result['administrator_roundtrip_verified'] is True
     print(json.dumps({'native_live_render': 'passed', 'samples': result['samples'],

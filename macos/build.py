@@ -29,7 +29,7 @@ def main():
     (bundle / 'Contents/Resources').mkdir()
     sources = [source / name for name in ['WidgetModel.swift', 'FleetModel.swift', 'FleetView.swift', 'AgentsView.swift', 'AdminSettings.swift', 'AdminView.swift', 'FailureDetails.swift', 'MacPerformance.swift', 'WidgetApp.swift']]
     translations = sorted(source.glob('*.lproj/*.strings'))
-    assets = [source / 'assets/meter-face.png']
+    assets = [source / 'assets/meter-face.png', source / 'assets/ectoplasma.jpg']
     for asset in assets:
         if not asset.is_file() or asset.stat().st_size > 65536:
             raise RuntimeError('missing or oversized meter artwork')
