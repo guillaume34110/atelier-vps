@@ -427,6 +427,10 @@ def _run_job(request, stream, *, ident=None, persistent=None, profile_ready=None
                 raise RuntimeError('task memory limit')
             if state['host_available_ram'] < reserve_ram:
                 raise RuntimeError('host memory pressure')
+
+        def input_timeout(_signum, _frame):
+            raise RuntimeError('input transfer timeout')
+
         try:
             if request.get('project_task'):
                 value = request['project_task']
@@ -435,7 +439,19 @@ def _run_job(request, stream, *, ident=None, persistent=None, profile_ready=None
                 persistent_start = usage(persistent)
             check_input()
             with Transfer(ROOT, stream, 'upload', ident, agent, project) as transfer:
-                extract(transfer, work, check_input, peak, request.get('source_complete', False))
+                remaining = start + timeout - time.monotonic()
+                if remaining <= 0:
+                    raise RuntimeError('input transfer timeout')
+                previous = signal.signal(signal.SIGALRM, input_timeout)
+                try:
+                    # A stalled stdin read cannot reach the regular resource checks.
+                    signal.setitimer(signal.ITIMER_REAL, remaining)
+                    extract(transfer, work, check_input, peak, request.get('source_complete', False))
+                except (EOFError, tarfile.ReadError) as exc:
+                    raise ValueError(f'source archive unreadable: {exc}; command was not started') from exc
+                finally:
+                    signal.setitimer(signal.ITIMER_REAL, 0)
+                    signal.signal(signal.SIGALRM, previous)
             check_input(final=True)
             if request.get('project_task'):
                 result['managed_project'] = projects.ensure_work(ROOT, request['project_task'], work, ident, peak, check_input)

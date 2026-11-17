@@ -63,6 +63,7 @@ def payload(argv, files=None, *, include_default=True, include_completion=True, 
 
 
 def verify_source_completion(container, evidence):
+    create_marker = ['python3', '-c', "from pathlib import Path;Path('must-not-run').touch()"]
     ident = uuid.uuid4().hex
     ok = json.loads(execute(container, 'run', payload(['true'], id=ident, source_complete=True)))
     assert ok['id'] == ident and ok['status'] == 'passed', ok
@@ -73,13 +74,37 @@ def verify_source_completion(container, evidence):
     execute(container, 'release', json.dumps({'id': ident}).encode() + b'\n')
     ident = uuid.uuid4().hex
     refused = json.loads(execute(container, 'run', payload(
-        ['python3', '-c', "from pathlib import Path;Path('must-not-run').write_text('unsafe')"],
-        id=ident, source_complete=True, include_completion=False), success=False))
+        create_marker, id=ident, source_complete=True, include_completion=False), success=False))
     assert refused['status'] == 'failed' and 'source transfer incomplete' in refused['reason'], refused
     execute(container, 'fetch', json.dumps({'id': ident, 'paths': ['work/must-not-run']}).encode() + b'\n', success=False)
     execute(container, 'release', json.dumps({'id': ident}).encode() + b'\n')
-    (evidence / 'source-completion.json').write_text(json.dumps({'complete': ok['status'], 'incomplete': refused['status'], 'duplicate': 'refused'}))
-    print('Complete source marker, duplicate identity refusal and incomplete-source nonexecution: passed', flush=True)
+
+    ident = uuid.uuid4().hex
+    header, _, archive = payload(create_marker, id=ident, source_complete=True, timeout=3).partition(b'\n')
+    argv = ['docker', 'exec', '-i', '--user', '10001:10001', container, *WORKER_EXEC, 'run']
+    with subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as proc:
+        with proc.stdin as stream:
+            proc.stdin = None  # Keep the partial upload open while waiting for the receipt.
+            stream.write(header + b'\n' + archive[:512])
+            stream.flush()
+            try:
+                raw, errors = proc.communicate(timeout=20)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate(timeout=10)
+                raise
+    assert proc.returncode == 1, errors[-2000:]
+    stalled = json.loads(raw)
+    assert stalled['id'] == ident and stalled['status'] == 'failed' and stalled['reason'] == 'input transfer timeout', stalled
+    preserved = execute(container, 'fetch', json.dumps({'id': ident, 'paths': ['receipt.json']}).encode() + b'\n')
+    with tarfile.open(fileobj=io.BytesIO(preserved)) as archive:
+        assert json.load(archive.extractfile('receipt.json')) == stalled
+    execute(container, 'fetch', json.dumps({'id': ident, 'paths': ['work/must-not-run']}).encode() + b'\n', success=False)
+    execute(container, 'release', json.dumps({'id': ident}).encode() + b'\n')
+    (evidence / 'source-completion.json').write_text(json.dumps({
+        'complete': ok['status'], 'incomplete': refused['status'], 'duplicate': 'refused',
+        'stalled': stalled['reason'], 'stalled_receipt': stalled['id'], 'stalled_released': True}))
+    print('Complete, duplicate, incomplete and stalled source uploads: passed', flush=True)
 
 
 def verify_budgeted_transfers(container, root, evidence):
