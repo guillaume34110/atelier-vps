@@ -101,6 +101,16 @@ class Streaming(unittest.TestCase):
             self.assertEqual(value['gzip'], '1f8b')
             self.assertEqual(value['names'], ['source.bin', '.usevps-source-complete'])
 
+    def test_silent_ssh_failure_includes_exit_status_and_operation(self):
+        real = subprocess.Popen
+
+        def spawn(_, **kwargs):
+            return real([sys.executable, '-c', 'raise SystemExit(255)'], **kwargs)
+
+        with patch.object(vps.subprocess, 'Popen', side_effect=spawn), patch.object(vps.shutil, 'which', return_value=None), patch.object(vps.client_config, 'ssh_options', return_value=[]):
+            with self.assertRaisesRegex(RuntimeError, 'SSH run exited with status 255 without a diagnostic'):
+                vps.transport('test', 'run', {'disk_bytes': 1024**2}, timeout=5)
+
     def test_upload_deadline_covers_a_receiver_that_never_reads(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp); (root / 'source.bin').write_bytes(os.urandom(256 * 1024)); real = subprocess.Popen; spawned = []

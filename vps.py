@@ -216,7 +216,8 @@ def transport(host, operation, request=None, payload=None, output=None, source=N
                     return proc.returncode, errors
             except (ValueError, UnicodeError):
                 pass
-            raise RuntimeError(errors.decode(errors="replace")[-2000:])
+            detail = errors.decode(errors="replace")[-2000:].strip()
+            raise RuntimeError(detail or f'SSH {operation} exited with status {proc.returncode} without a diagnostic')
         return proc.returncode, result
 
 
