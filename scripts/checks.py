@@ -481,7 +481,10 @@ def main():
         assert orphan["status"] == "passed", orphan
         command(["docker", "exec", name, "python3", "-c", "from pathlib import Path; p=int(Path('/workspace/jobs/" + orphan["id"] + "/work/orphan.pid').read_text()); s=Path('/proc')/str(p)/'stat'; assert not s.exists() or s.read_text().rsplit(') ',1)[1].startswith('Z ')"])
         execute(name, "release", json.dumps({"id": orphan["id"]}).encode() + b"\n")
-        failed = json.loads(execute(name, "run", payload(["python3", "-c", "import time; time.sleep(5)"], timeout=1), success=False))
+        long_command = ["python3", "-c", "import time; time.sleep(5)", "x" * 65100]
+        raw = execute(name, "run", payload(long_command, timeout=1), success=False)
+        assert len(raw) > 65536
+        failed = json.loads(raw)
         assert failed["status"] == "failed" and failed["reason"] == "timeout", failed
         failed_wait = json.loads(execute(name, 'fetch', json.dumps({'id': failed['id'], 'wait_timeout': 2}).encode() + b'\n'))
         assert failed_wait['status'] == 'failed' and not failed_wait['timed_out'], failed_wait
@@ -489,6 +492,8 @@ def main():
         with tarfile.open(fileobj=io.BytesIO(detail_tar)) as details:
             timeout_card = json.load(details.extractfile('diagnostic.json'))
         assert timeout_card['kind'] == 'timeout' and timeout_card['resources']['timeout_seconds'] == 1, timeout_card
+        (evidence / 'long-receipt-proof.json').write_text(json.dumps({
+            'receipt_bytes': len(raw), 'wait': failed_wait['status'], 'diagnostic': timeout_card['kind']}))
         execute(name, "release", json.dumps({"id": failed["id"]}).encode() + b"\n")
         failed = json.loads(execute(name, 'run', payload(['python3', '-c',
             "print('AssertionError: expected 42'); print('TOKEN=private-fixture-value'); raise SystemExit(7)"],
