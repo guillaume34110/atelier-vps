@@ -167,6 +167,19 @@ class InodeAdmissionTests(unittest.TestCase):
 
 
 class WaitTests(unittest.TestCase):
+    def test_large_legacy_receipt_can_be_waited_for_and_read_for_diagnostics(self):
+        ident = 'a' * 32
+        with tempfile.TemporaryDirectory() as tmp, patch.object(worker, 'ROOT', Path(tmp)):
+            job = Path(tmp) / 'jobs' / ident
+            job.mkdir(parents=True)
+            receipt = job / 'receipt.json'
+            receipt.write_text(json.dumps({'id': ident, 'status': 'failed', 'started': 1, 'ended': 2,
+                                           'returncode': 1, 'argv': ['false', 'x' * 65536]}))
+            self.assertEqual(worker.wait_job(ident, 0)['status'], 'failed')
+            detail = worker.diagnostics.get(Path(tmp), job)
+            self.assertEqual(detail['kind'], 'command')
+            self.assertEqual(detail['returncode'], 1)
+
     def test_wait_returns_only_after_receipt_and_reservation_finish(self):
         ident = 'a' * 32
         with tempfile.TemporaryDirectory() as tmp, patch.object(worker, 'ROOT', Path(tmp)):

@@ -22,7 +22,7 @@ import time
 import uuid
 
 from worker import GIB, safe_path
-from telemetry import public_label
+from telemetry import JOB_RECEIPT_LIMIT, public_label
 import client_config
 import projects
 import error_journal
@@ -223,14 +223,16 @@ def transport(host, operation, request=None, payload=None, output=None, source=N
 
 def json_request(host, operation, request=None, source=None, timeout=30):
     rc, raw = transport(host, operation, request, source=source, timeout=timeout)
-    if not raw or len(raw) > 65536:
+    limit = JOB_RECEIPT_LIMIT + 1 if operation == 'run' else 65536
+    if not raw or len(raw) > limit:
         raise ValueError('invalid bounded gateway response')
     value = json.loads(raw)
     if not isinstance(value, dict):
         raise ValueError('gateway response must be an object')
     if rc:
         value['ok'] = False
-    if rc or value.get('status') == 'failed' or value.get('ok') is False:
+    job_failed = value.get('status') == 'failed' and value.get('kind') != 'job_wait'
+    if rc or job_failed or value.get('ok') is False:
         value['diagnostic_id'] = error_journal.record('remote.' + operation,
             value.get('error') or value.get('reason') or 'command exited with code ' + str(value.get('returncode')),
             server=host, code=value.get('reason') or value.get('status') or 'refused')

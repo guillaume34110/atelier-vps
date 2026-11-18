@@ -8,7 +8,7 @@ import re
 import tarfile
 
 import resources
-from telemetry import public_label
+from telemetry import JOB_RECEIPT_LIMIT, public_label
 
 LIMIT = 32 * 1024
 COUNT = 8
@@ -112,7 +112,7 @@ def get(root, path):
     if cached:
         return cached
     receipt = path / 'receipt.json'
-    if receipt.is_symlink() or receipt.stat().st_size > 65536:
+    if receipt.is_symlink() or receipt.stat().st_size > JOB_RECEIPT_LIMIT:
         raise ValueError('failure details unavailable')
     state = json.loads(receipt.read_text())
     if state.get('status') != 'failed':

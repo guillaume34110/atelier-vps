@@ -146,3 +146,22 @@ class Streaming(unittest.TestCase):
         with patch.object(vps, 'json_request', side_effect=[(0, {'capabilities': {'transfer_budgets': True}}), (1, {'ok': False, 'error': 'job not found or already released'})]):
             with self.assertRaisesRegex(vps.RoutingError, 'already released.*do not resubmit'):
                 vps.fetch_plan('test', 'a' * 32, ['stdout.log'])
+
+    def test_wait_on_failed_command_does_not_report_a_fetch_error(self):
+        state = {'kind': 'job_wait', 'id': 'a' * 32, 'status': 'failed', 'timed_out': False}
+        with patch.object(vps, 'transport', return_value=(0, json.dumps(state).encode())), \
+                patch.object(error_journal, 'record') as record:
+            self.assertEqual(vps.json_request('test', 'fetch', {'id': state['id'], 'wait_timeout': 0}), (0, state))
+            record.assert_not_called()
+
+    def test_only_run_accepts_ascii_json_expansion_of_a_long_command_receipt(self):
+        argv = ['true', '🌍' * 16300]
+        request = {'argv': argv}
+        self.assertLess(len(json.dumps(request, ensure_ascii=False).encode()), 65536)
+        receipt = {'id': 'a' * 32, 'status': 'passed', 'argv': argv, 'returncode': 0}
+        raw = (json.dumps(receipt) + '\n').encode()
+        self.assertGreater(len(raw), 65536)
+        with patch.object(vps, 'transport', return_value=(0, raw)):
+            self.assertEqual(vps.json_request('test', 'run', request), (0, receipt))
+            with self.assertRaisesRegex(ValueError, 'invalid bounded gateway response'):
+                vps.json_request('test', 'status')

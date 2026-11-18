@@ -21,7 +21,7 @@ import threading
 import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from telemetry import process_token, public_label, record_activity, snapshot, Transfer
+from telemetry import JOB_RECEIPT_LIMIT, process_token, public_label, record_activity, snapshot, Transfer
 import dependency_cache
 import diagnostics
 import projects
@@ -554,7 +554,7 @@ def _run_job(request, stream, *, ident=None, persistent=None, profile_ready=None
                                            total_used_bytes=final['used_bytes'], physical_free_bytes=final['free_bytes'])
         except Exception as exc:
             stop_children()
-            result.update(status="failed", reason=str(exc), returncode=1, ended=time.time())
+            result.update(status="failed", reason=str(exc)[:4096], returncode=1, ended=time.time())
         if result.get('resources') and (result['status'] == 'passed' or result.get('reason') == 'task memory limit'):
             try:
                 if profile_ready is None or result.get('reason') == 'task memory limit' or profile_ready():
@@ -585,7 +585,7 @@ def wait_job(ident, timeout):
             if path.is_symlink() or file.is_symlink():
                 raise ValueError('invalid job receipt')
             if file.exists():
-                if file.stat().st_size > 65536:
+                if file.stat().st_size > JOB_RECEIPT_LIMIT:
                     raise ValueError('invalid job receipt')
                 state = json.loads(file.read_text())
                 if not isinstance(state, dict) or state.get('id') != ident or state.get('status') not in ('running', 'passed', 'failed'):

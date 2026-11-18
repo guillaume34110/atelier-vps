@@ -13,6 +13,8 @@ PROC = Path('/proc')
 CGROUP = Path('/sys/fs/cgroup')
 HISTORY_LIMIT = 8
 ACTIVITY_LIMIT = 16384
+# Encoding a 64 KiB request as ASCII JSON can triple its size before receipt metadata.
+JOB_RECEIPT_LIMIT = 256 * 1024
 
 
 def public_label(value, default):
