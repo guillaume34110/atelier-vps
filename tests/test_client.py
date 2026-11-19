@@ -1,8 +1,11 @@
 import contextlib
+import hashlib
 import io
 import json
 from pathlib import Path
+import tarfile
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -14,6 +17,37 @@ from scripts.checks import ssh_frontends
 
 
 class ClientConfigurationTests(unittest.TestCase):
+    def test_slow_result_fetch_keeps_the_verified_result(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            content = b'verified result'
+            manifest = {'work/result.txt': {'bytes': len(content), 'sha256': hashlib.sha256(content).hexdigest()}}
+            archive = io.BytesIO()
+            with tarfile.open(fileobj=archive, mode='w') as tar:
+                for name, data in [('manifest.json', json.dumps(manifest).encode()), ('work/result.txt', content)]:
+                    member = tarfile.TarInfo(name)
+                    member.size = len(data)
+                    tar.addfile(member, io.BytesIO(data))
+
+            def slow_transport(host, operation, request, *, output, timeout):
+                self.assertEqual((host, operation), ('test-worker', 'fetch'))
+                self.assertGreater(timeout, 151)
+                self.assertLessEqual(timeout, 3600)
+                output.write(archive.getvalue())
+                return 0, None
+
+            with patch('sys.argv', ['vps.py', '--server', 'test', 'fetch', 'test:' + 'a' * 32, 'work/result.txt']), \
+                    patch.dict(vps.os.environ, {'TASK_WORKSPACE': str(root)}), \
+                    patch.object(vps, 'job_target', return_value=({'id': 'test', 'ssh_host': 'test-worker'}, 'a' * 32)), \
+                    patch.object(vps, 'fetch_plan', return_value={'bytes': 16 * 1024**2, 'archive_bytes': 17 * 1024**2, 'disk_bytes': 33 * 1024**2}), \
+                    patch.object(vps.shutil, 'disk_usage', return_value=SimpleNamespace(total=100 * vps.GIB, free=90 * vps.GIB)), \
+                    patch.object(vps, 'transport', side_effect=slow_transport), contextlib.redirect_stdout(io.StringIO()) as stdout:
+                self.assertEqual(vps.main(), 0)
+            result = json.loads(stdout.getvalue())
+            self.assertEqual(result['verified_files'], 1)
+            self.assertFalse(result['released'])
+            self.assertEqual((Path(result['directory']) / 'work/result.txt').read_bytes(), content)
+
     def test_global_status_alias_keeps_the_whole_fleet(self):
         with patch('sys.argv', ['vps.py', 'status', '--global']), patch.object(
                 vps, 'fleet_status', return_value={'ok': True}) as status, contextlib.redirect_stdout(io.StringIO()):
