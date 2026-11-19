@@ -131,6 +131,35 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
                     self.assertIn('use status/start', result.content[0].text)
             transport.assert_not_called()
 
+    async def test_slow_guarded_fetch_can_finish_without_a_second_submission(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            helper = root / '.local/bin/workspace-budget.py'
+            helper.parent.mkdir(parents=True)
+            helper.touch()
+            workspace = root / 'output/task-tmp'
+            summary = {'verified_files': 1, 'directory': str(workspace / 'result'), 'released': False}
+
+            def completed_transfer(command, **kwargs):
+                self.assertGreater(kwargs['timeout'], 151)
+                self.assertLessEqual(kwargs['timeout'], 3700)
+                workspace.mkdir(parents=True)
+                (workspace / 'stdout.log').write_text(json.dumps(summary) + '\n')
+                return subprocess.CompletedProcess(command, 0, stdout='', stderr='')
+
+            with patch.object(mcp_server.Path, 'home', return_value=root), \
+                    patch.object(mcp_server.vps, 'job_target', return_value=({'id': 'test', 'ssh_host': 'test-worker'}, 'a' * 32)), \
+                    patch.object(mcp_server.vps, 'fetch_plan', return_value={'disk_bytes': 33 * 1024**2, 'archive_bytes': 17 * 1024**2}), \
+                    patch.object(mcp_server.subprocess, 'run', side_effect=completed_transfer) as transfer, \
+                    patch.object(mcp_server.vps, 'run_on_server') as submit:
+                async with Client(mcp_server.server) as client:
+                    result = await client.call_tool('vps_fetch', {'job_id': 'test:' + 'a' * 32,
+                        'paths': ['work/result.txt'], 'project': directory})
+            self.assertFalse(result.is_error)
+            self.assertEqual(result.structured_content, summary)
+            transfer.assert_called_once()
+            submit.assert_not_called()
+
     async def test_guarded_fetch_refusal_is_actionable_and_does_not_submit_a_job(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

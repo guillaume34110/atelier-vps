@@ -890,7 +890,7 @@ def main():
         with archive.open("wb") as out:
             rc, _ = transport(profile['ssh_host'], "fetch", {"id": ident, "paths": args.paths, 'max_bytes': budget['bytes'],
                               **({'compression': 'gzip'} if budget.get('compression') == 'gzip' else {})},
-                              output=out, timeout=min(3600, max(120, math.ceil(budget['archive_bytes'] / 1024 ** 2) + 60)))
+                              output=out, timeout=3600)
         if rc:
             raise RuntimeError("fetch failed; task remains on server")
         if archive.stat().st_size > budget['archive_bytes']:
