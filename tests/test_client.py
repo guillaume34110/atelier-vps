@@ -17,6 +17,29 @@ from scripts.checks import ssh_frontends
 
 
 class ClientConfigurationTests(unittest.TestCase):
+    def test_result_previews_ignore_mac_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'plot.png').write_bytes(b'server plot fixture')
+            (root / '._plot.png').write_bytes(b'AppleDouble metadata')
+            self.assertEqual(vps.fetched_summary(root, 1)['preview_images'], [str(root / 'plot.png')])
+
+    def test_receiving_budget_covers_large_filesystem_allocations(self):
+        for block in (4096, 1024 ** 2):
+            with self.subTest(block=block), tempfile.TemporaryDirectory() as root, \
+                    patch.object(vps.os, 'statvfs', return_value=SimpleNamespace(f_bsize=block)):
+                budget = {'files': 118, 'directories': 16, 'disk_bytes': 20 * 1024 ** 2}
+                required = vps.receiving_disk_bytes(budget, root)
+                self.assertGreaterEqual(required, 274 * block)
+                self.assertGreaterEqual(required, budget['disk_bytes'])
+        with tempfile.TemporaryDirectory() as root:
+            for count in (True, -1, 0, 10001, '3'):
+                with self.subTest(count=count), self.assertRaisesRegex(ValueError, 'file count'):
+                    vps.receiving_disk_bytes({'files': count, 'disk_bytes': 1}, root)
+            for count in (True, -1, '3'):
+                with self.subTest(count=count), self.assertRaisesRegex(ValueError, 'directory count'):
+                    vps.receiving_disk_bytes({'files': 1, 'directories': count, 'disk_bytes': 1}, root)
+
     def test_slow_result_fetch_keeps_the_verified_result(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

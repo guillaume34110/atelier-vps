@@ -610,13 +610,24 @@ def fetch_plan(host, ident, paths):
 def fetched_summary(destination, count):
     images = []
     for file in sorted(destination.rglob('*.png')):
-        if file.is_file() and not file.is_symlink():
+        if file.is_file() and not file.is_symlink() and not file.name.startswith('._'):
             images.append(str(file))
             if len(images) == 8:
                 break
     return {'verified_files': count, 'directory': str(destination), 'released': False,
             'preview_images': images,
             'preview_instruction': 'Use vps_preview(project, path) for these existing PNGs. If viewing fails, report its text once; do not reopen error images or guess another path.'}
+
+
+def receiving_disk_bytes(budget, directory):
+    # exFAT allocates large clusters and macOS adds AppleDouble metadata files.
+    files = budget.get('files', 10000)
+    directories = budget.get('directories', files)
+    if type(files) is not int or not 1 <= files <= 10000:
+        raise ValueError('invalid result file count; preserve the remote task')
+    if type(directories) is not int or directories < 0:
+        raise ValueError('invalid result directory count; preserve the remote task')
+    return budget['disk_bytes'] + 2 * (files + directories + 3) * os.statvfs(directory).f_bsize
 
 
 def unpack_result(archive, destination, max_bytes=256 * 1024 ** 2):
@@ -882,7 +893,7 @@ def main():
     profile, ident=job_target(args.id,args.server) if not args.host else ({'id':'legacy','ssh_host':args.host},args.id)
     budget = fetch_plan(profile['ssh_host'], ident, args.paths)
     free = shutil.disk_usage(root)
-    if free.free < max(free.total // 10, GIB) + budget['disk_bytes']:
+    if free.free < max(free.total // 10, GIB) + receiving_disk_bytes(budget, root):
         raise RuntimeError('insufficient local disk reserve; preserve the remote task')
     with tempfile.TemporaryDirectory(prefix="vps-transfer-", dir=root) as staging:
         staging = Path(staging)
