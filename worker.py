@@ -626,7 +626,7 @@ def fetch(request, stream):
         if request.get('preview'):
             size = len(diagnostics.bundle(report))
             stream.write(json.dumps({'ok': True, 'files': 1, 'bytes': size,
-                                     'archive_bytes': size, 'disk_bytes': 2 * size + MIB}).encode())
+                                     'directories': 0, 'archive_bytes': size, 'disk_bytes': 2 * size + MIB}).encode())
             return
         with Transfer(ROOT, stream, 'download', path.name, report['agent'], report['project']) as transfer:
             transfer.write(diagnostics.bundle(report))
@@ -661,7 +661,9 @@ def fetch(request, stream):
         if compression not in (None, 'gzip'):
             raise ValueError('unsupported result compression')
         archive_bytes = total + (total + 999) // 1000 + len(files) * 32768 + 5 * MIB
+        directories = {parent for name in files for parent in Path(name).parents if parent != Path('.')}
         stream.write(json.dumps({'ok': True, 'files': len(files), 'bytes': total,
+                                 'directories': len(directories),
                                  'archive_bytes': archive_bytes, 'disk_bytes': archive_bytes + total + MIB,
                                  'compression': compression}).encode())
         return

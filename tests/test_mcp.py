@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 import subprocess
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -143,13 +144,16 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
             def completed_transfer(command, **kwargs):
                 self.assertGreater(kwargs['timeout'], 151)
                 self.assertLessEqual(kwargs['timeout'], 3700)
+                allowance = float(command[command.index('--temp-gib') + 1]) * 1024**3
+                self.assertGreaterEqual(allowance, 275 * 1024**2)
                 workspace.mkdir(parents=True)
                 (workspace / 'stdout.log').write_text(json.dumps(summary) + '\n')
                 return subprocess.CompletedProcess(command, 0, stdout='', stderr='')
 
             with patch.object(mcp_server.Path, 'home', return_value=root), \
                     patch.object(mcp_server.vps, 'job_target', return_value=({'id': 'test', 'ssh_host': 'test-worker'}, 'a' * 32)), \
-                    patch.object(mcp_server.vps, 'fetch_plan', return_value={'disk_bytes': 33 * 1024**2, 'archive_bytes': 17 * 1024**2}), \
+                    patch.object(mcp_server.vps, 'fetch_plan', return_value={'files': 118, 'directories': 0, 'disk_bytes': 33 * 1024**2, 'archive_bytes': 17 * 1024**2}), \
+                    patch.object(mcp_server.vps.os, 'statvfs', return_value=SimpleNamespace(f_bsize=1024**2)), \
                     patch.object(mcp_server.subprocess, 'run', side_effect=completed_transfer) as transfer, \
                     patch.object(mcp_server.vps, 'run_on_server') as submit:
                 async with Client(mcp_server.server) as client:

@@ -157,6 +157,7 @@ final class Monitor: ObservableObject {
     let agents = RemoteAgentsControl()
     var onUpdate: (() -> Void)?
     var successfulSamples = 0
+    var samplingPaused = false
     var raw = Data()
     private var process: Process?
     private var timer: Timer?
@@ -219,7 +220,7 @@ final class Monitor: ObservableObject {
     }
 
     private func sampleNext() {
-        guard process == nil, visible else { return }
+        guard process == nil, visible, !samplingPaused else { return }
         guard !queue.isEmpty else { refreshing = false; schedule(); return }
         let id = queue.removeFirst()
         guard let connection = servers.first(where: { $0.id == id })?.connection,
@@ -264,6 +265,7 @@ final class Monitor: ObservableObject {
     }
 
     private func finish(_ data: Data?, started: Double, connection: ServerConnection) {
+        guard !samplingPaused else { refreshing = false; return }
         if let index = servers.firstIndex(where: { $0.id == connection.id }) {
             do {
                 guard let data = data else { throw MonitorError.connection }
@@ -1103,6 +1105,8 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func captureLayouts(_ path: URL) {
+        // Live samples would replace the synthetic Mac status during layout capture.
+        monitor.samplingPaused = true
         var layouts: [(String, Double, Double, Bool, Bool)] = [
             ("narrow", 360, 600, false, false), ("standard", 480, 640, false, false),
             ("wide", 720, 800, false, false), ("short", 360, 300, false, false),
@@ -1130,7 +1134,9 @@ final class WidgetDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     monitor.showingMac = false
                     monitor.select(nil)
                     administration.showingManagement = false; administration.draft = originalPolicy
+                    monitor.samplingPaused = false
                     if CommandLine.arguments.contains("--exit-after-capture") { quit() }
+                    else { monitor.refresh() }
                 } catch { fputs("Layout receipt failed: \(error)\n", stderr); exit(1) }
                 return
             }

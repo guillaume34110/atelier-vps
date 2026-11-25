@@ -95,6 +95,20 @@ class ArchiveTests(unittest.TestCase):
                 worker.fetch({**request, 'max_bytes': plan['bytes'] - 1}, io.BytesIO())
             self.assertTrue((job / 'result.bin').exists())
 
+    def test_result_preview_counts_distinct_parent_directories(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(worker, 'ROOT', Path(tmp)):
+            job = Path(tmp) / 'jobs' / ('a' * 32)
+            job.mkdir(parents=True)
+            (job / 'receipt.json').write_text('{"status":"passed"}')
+            for name in ('data/a/one', 'data/a/two', 'data/b/three'):
+                file = job / name
+                file.parent.mkdir(parents=True, exist_ok=True)
+                file.write_text('result')
+            preview = io.BytesIO()
+            worker.fetch({'id': 'a' * 32, 'paths': ['data'], 'preview': True}, preview)
+            plan = json.loads(preview.getvalue())
+            self.assertEqual((plan['files'], plan['directories']), (3, 3))
+
     def test_source_filters_secrets_and_dependencies(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

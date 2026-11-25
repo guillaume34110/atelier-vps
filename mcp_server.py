@@ -284,7 +284,8 @@ def vps_fetch(job_id: str, paths: list[str], project: str, server: str | None = 
     if not directory.is_dir():
         raise ToolError('project directory must exist')
     budget = vps.fetch_plan(profile['ssh_host'], ident, paths)
-    temp_gib = max(0.025, math.ceil(budget['disk_bytes'] / 1024 ** 2) / 1024)
+    disk_bytes = vps.receiving_disk_bytes(budget, directory)
+    temp_gib = max(0.025, math.ceil(disk_bytes / 1024 ** 2) / 1024)
     wait = 3700
     helper = Path.home() / '.local/bin/workspace-budget.py'
     args = [sys.executable, str(ROOT / 'vps.py'), '--server', profile['id'], 'fetch', profile['id']+':'+ident, *paths]
